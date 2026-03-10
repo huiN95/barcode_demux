@@ -1,0 +1,14 @@
+target
+.git
+.gitignore
+*.log
+**/*.fastq
+**/*.fq
+**/*.bam
+**/*.cram
+**/*.fa
+**/*.fasta
+**/*.tmp
+**/__pycache__
+**/.pytest_cache
+.DS_Store

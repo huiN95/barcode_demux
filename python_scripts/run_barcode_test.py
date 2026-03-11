@@ -34,14 +34,14 @@ def docker_barcode_demux(
     cmd = [
         "docker", "run", "--rm", "-t",
         "-v", "/data:/data",
-        "--user", "$(id -u):$(id -g)",
+        # "--user", "$(id -u):$(id -g)",
         docker_image,
         "barcode_demux",
         "-i", str(infile),
         "-o", str(out_prefix),
         "--barcode", str(pattern),
         "--log_folder", str(out_prefix),
-        "--max_distance", int(max_distance),
+        "--max_distance", str(max_distance),
     ]
 
     run(cmd)

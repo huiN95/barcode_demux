@@ -95,6 +95,6 @@ WORKDIR /root
 
 COPY --from=builder /usr/bin/barcode_demux /usr/bin/barcode_demux
 
-ENTRYPOINT ["/usr/bin/barcode_demux"]
+# ENTRYPOINT ["/usr/bin/barcode_demux"]
 
 

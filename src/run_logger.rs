@@ -25,7 +25,7 @@ pub fn init_tracing_log(cli: &Cli) -> tracing_appender::non_blocking::WorkerGuar
     if !log_path.exists() {
         create_dir_all(log_path).unwrap();
     }
-    let run_log_path = log_path.join(format!("{}_primer_demux_run.log", cli.log_folder));
+    let run_log_path = log_path.join("barcode_demux_run.log");
 
     // let run_log_filepath = format!("{}_primer_demux_run.log", log_path);
     let log_file = File::create(&run_log_path).unwrap_or_else(|e| {
@@ -112,7 +112,7 @@ pub fn init_metrics<P: AsRef<Path>>(dir: P) -> Result<MetricsGuard, Box<dyn Erro
     let in_path = dir.as_ref();
     let out_path = if in_path.is_dir() {
         // 传进来的是目录
-        in_path.join("_primer_metrics.log")
+        in_path.join("primer_metrics.log")
     } else {
         // 传进来的是文件；改文件名
         let stem = in_path

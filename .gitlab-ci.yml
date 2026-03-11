@@ -13,7 +13,7 @@ stages:
 variables:
   PROJECT_NAME: barcode_demux
   TEMP_TAG: tmp-$CI_COMMIT_SHORT_SHA
-  # primer_SMOKE_TEST_DIR: /data/CI_CD_DATASETS/PROJECT_primer/smoke_test
+  BARCODE_SMOKE_TEST_DIR: /data/CI_CD_DATASETS/PROJECT_barcode/smoke_test
   # ASSIGN_BARCODE_TEST_DIR: /data/CI_CD_DATASETS/PROJECT_primer/assign_barcode_test
   RELEASE_TAG: $CI_COMMIT_TAG
   CI_REGISTRY_IMAGE: 192.168.3.38:5000/algo/barcode_demux
@@ -31,7 +31,18 @@ build_temp_image:
     - echo `whoami`
     # - bash -c 'source ~/.bashrc && echo `python --version` '
     - echo "📦 Building temp image..."
-    - DOCKER_BUILDKIT=0 docker build -t $PROJECT_NAME:$TEMP_TAG .
+    - DOCKER_BUILDKIT=1 docker build -t $PROJECT_NAME:$TEMP_TAG .
+  except:
+    - tags
+    - web
+
+
+adapter_smoke_test:
+  stage: smoke_test
+  script:
+    - echo "🔥 Smoke testing temp image..."
+    - echo "冒烟测试文件"
+    - bash -c 'source ~/.bashrc && python -u python_scripts/run_barcode_test.py --test-file-dir ${BARCODE_SMOKE_TEST_DIR} --docker-image ${PROJECT_NAME}:${TEMP_TAG} --test-type smoke'
   except:
     - tags
     - web
@@ -46,4 +57,6 @@ push_release:
     - echo "📤 Pushing release image DONE. $CI_REGISTRY_IMAGE:$RELEASE_TAG"
   only:
     - tags
+
+
 

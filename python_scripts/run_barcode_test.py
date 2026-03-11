@@ -53,9 +53,9 @@ def mode_barcode_test(test_file_dir: Path, docker_image: str) -> None:
 
     for file in test_files:
         print(f"➡️  Running keep_adapter toggles on {file}")
-        prefix = Path(str(file).rsplit(".", maxsplit=1)[0])
+        # prefix = Path(str(file).rsplit(".", maxsplit=1)[0])
         # out_prefix = Path(f"{prefix}.keep_adapter.bam")
-        output_dir = prefix / "output"
+        output_dir = test_file_dir / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
         docker_barcode_demux(

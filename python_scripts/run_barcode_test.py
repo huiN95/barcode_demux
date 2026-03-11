@@ -34,6 +34,7 @@ def docker_barcode_demux(
     cmd = [
         "docker", "run", "--rm", "-t",
         "-v", "/data:/data",
+        "--user", "$(id -u):$(id -g)",
         docker_image,
         "barcode_demux",
         "-i", str(infile),

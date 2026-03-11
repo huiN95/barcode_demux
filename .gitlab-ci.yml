@@ -40,6 +40,7 @@ build_temp_image:
 adapter_smoke_test:
   stage: smoke_test
   script:
+    - echo "runner user: $(whoami)"
     - echo "🔥 Smoke testing temp image..."
     - echo "冒烟测试文件"
     - bash -c 'source ~/.bashrc && python -u python_scripts/run_barcode_test.py --test-file-dir ${BARCODE_SMOKE_TEST_DIR} --docker-image ${PROJECT_NAME}:${TEMP_TAG} --test-type smoke'
@@ -51,6 +52,7 @@ adapter_smoke_test:
 push_release:
   stage: push_release
   script:
+    - echo `whoami`
     - echo "📤 Pushing release image..."
     - docker tag $PROJECT_NAME:$TEMP_TAG $CI_REGISTRY_IMAGE:$RELEASE_TAG
     - docker push $CI_REGISTRY_IMAGE:$RELEASE_TAG

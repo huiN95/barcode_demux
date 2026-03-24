@@ -12,14 +12,17 @@ mod barcode_demuxer_v1;
 mod barcode_mysers;
 mod core_context;
 mod demux_pipeline_v1;
+mod demux_pipeline_v2;
+
 mod demux_primer;
+mod multiple_barcode_demuxer_v1;
 mod writer_worker;
 use clap::Parser;
 use cli::Cli;
 
-use run_logger::{init_metrics, init_tracing_log};
-
 use crate::demux_pipeline_v1::demux_pipeline_v1;
+use crate::demux_pipeline_v2::demux_pipeline_v2;
+use run_logger::{init_metrics, init_tracing_log};
 // use crate::io_utils::ensure_output_dir;
 use tracing::info;
 
@@ -38,6 +41,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "1" => {
             info!("Using demux pipeline version 1");
             demux_pipeline_v1(&cli).unwrap();
+        }
+        "2" => {
+            info!("Using demux pipeline version 1");
+            demux_pipeline_v2(&cli).unwrap();
         }
         other => panic!("Unsupported pipeline version: {}", other),
     }

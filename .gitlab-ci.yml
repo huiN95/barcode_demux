@@ -9,6 +9,7 @@ stages:
   - nodiff_test
   - push_release
   - package
+  - push_ali
 
 variables:
   PROJECT_NAME: barcode_demux
@@ -17,7 +18,10 @@ variables:
   # ASSIGN_BARCODE_TEST_DIR: /data/CI_CD_DATASETS/PROJECT_primer/assign_barcode_test
   RELEASE_TAG: $CI_COMMIT_TAG
   CI_REGISTRY_IMAGE: 192.168.3.38:5000/algo/barcode_demux
-  GIT_SUBMODULE_STRATEGY: recursive
+  # GIT_SUBMODULE_STRATEGY: recursive
+  ALI_ACR_REGISTRY_IMAGE: geneus-registry.cn-hongkong.cr.aliyuncs.com/algo/adacus
+  REFS_DIR: /data/CI_CD_DATASETS/REF_GENOMES
+
 
 
 # ===============================
@@ -57,6 +61,27 @@ push_release:
     - docker tag $PROJECT_NAME:$TEMP_TAG $CI_REGISTRY_IMAGE:$RELEASE_TAG
     - docker push $CI_REGISTRY_IMAGE:$RELEASE_TAG
     - echo "📤 Pushing release image DONE. $CI_REGISTRY_IMAGE:$RELEASE_TAG"
+  only:
+    - tags
+
+
+package:
+  stage: package
+  script:
+    - echo "📦 Generating temporary package..."
+    - docker save -o $PROJECT_NAME-$RELEASE_TAG.tar $CI_REGISTRY_IMAGE:$RELEASE_TAG
+    - mv $PROJECT_NAME-$RELEASE_TAG.tar /dataLab/Geneus110/BC/共享文件夹/算法镜像/adacus
+  only:
+    - tags
+
+
+push_ali:
+  stage: push_ali
+  script:
+    - echo "📤 Pushing release image to ali"
+
+    - docker tag $CI_REGISTRY_IMAGE:$RELEASE_TAG  $ALI_ACR_REGISTRY_IMAGE:$RELEASE_TAG
+    - docker push $ALI_ACR_REGISTRY_IMAGE:$RELEASE_TAG
   only:
     - tags
 

@@ -6,7 +6,7 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[command(
     name = "artificial barcode demux",
-    version = "0.0.1",
+    version = "0.0.2",
     about = "匹配给定模式在序列文件中的近似匹配"
 )]
 pub struct Cli {
@@ -62,9 +62,17 @@ pub struct Cli {
           default_value_t = 20)]
     pub min_q: usize,
 
-        #[arg(long = "search_bound",
+    #[arg(long = "search_bound",
           value_parser = clap::value_parser!(usize),
           default_value_t = 40)]
     pub search_bound: usize,
+
+    // 是否过滤只有单端有barcode的序列
+    #[arg(long = "single_end_filter", default_value_t = false)]
+    pub single_end_filter: bool,
+
+        // 是否过滤只有单端有barcode的序列
+    #[arg(long = "reverse_barcode", default_value_t = false)]
+    pub reverse_barcode: bool,
 
 }

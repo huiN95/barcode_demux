@@ -32,7 +32,7 @@ pub fn write_barcode_results(
     match output_format {
         "fa" | "fasta" | "fastq" | "fq" | "bam" => {
             while let Ok(demuxed_record) = barcode_demux_info.recv() {
-                counter!("total_channels").increment(1 as u64);
+                counter!("writer_received").increment(1 as u64);
 
                 let (demuxed_reads, barcode_pair) = demuxed_record;
                 let Some(barcode_pair) = barcode_pair else {
@@ -61,7 +61,7 @@ pub fn write_barcode_results(
                 // {
                 //     error!(?e, "有效subreads文件写入失败");
                 // }
-                counter!("valid_reads").increment(1 as u64);
+                counter!("wirter_ok").increment(1 as u64);
 
                 pb.inc(1);
             }

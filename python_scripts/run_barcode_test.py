@@ -42,6 +42,7 @@ def docker_barcode_demux(
         "--barcode", str(pattern),
         "--log_folder", str(out_prefix),
         "--max_distance", str(max_distance),
+        "--pipeline_version", "2",
     ]
 
     run(cmd)

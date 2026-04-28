@@ -139,13 +139,14 @@ dependencies = [
 
 [[package]]
 name = "barcode_demux"
-version = "0.0.2"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "bio",
  "bio-types",
  "clap",
  "crossbeam",
+ "csv",
  "env_logger",
  "flate2",
  "glob",

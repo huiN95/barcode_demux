@@ -6,10 +6,12 @@ use crossbeam::channel::Sender;
 use rust_htslib::bam::{Read, Reader as BAMReader}; // <─ import the trait!
 use std::sync::Arc;
 // use rust_htslib::htslib::{ hts_readrec_func};
+use anyhow::{anyhow, Result};
 use seq_io::fasta::{Reader, Record};
 use std::fs::File;
 use std::{path::Path, path::PathBuf, thread};
 use walkdir::WalkDir;
+
 pub fn read_fasta_2_queue<P: AsRef<Path>>(
     input_path: P,
     sender: Sender<ReadRecord>,
@@ -43,18 +45,40 @@ pub fn read_fasta_2_queue<P: AsRef<Path>>(
     Ok(())
 }
 
+// pub fn read_fastq_2_queue<P: AsRef<Path>>(
+//     input_path: P,
+//     sender: Sender<ReadRecord>,
+// ) -> Result<(), Box<dyn std::error::Error>> {
+//     let file = File::open(input_path)?;
+//     let reader = FastqReader::new(file);
+//     for record in reader.records() {
+//         let record = record?;
+//         let mut read_record = ReadRecord::default();
+//         read_record.id = record.id().into();
+//         read_record.sequence = record.seq().to_vec();
+//         read_record.quality = Some(record.qual().to_vec());
+//         if let Err(e) = sender.send(read_record) {
+//             eprintln!("Failed to send: {}", e);
+//             break;
+//         }
+//     }
+//     Ok(())
+// }
+
 pub fn read_fastq_2_queue<P: AsRef<Path>>(
     input_path: P,
     sender: Sender<ReadRecord>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let file = File::open(input_path)?;
     let reader = FastqReader::new(file);
+
     for record in reader.records() {
         let record = record?;
         let mut read_record = ReadRecord::default();
         read_record.id = record.id().into();
         read_record.sequence = record.seq().to_vec();
-        read_record.quality = Some(record.qual().to_vec());
+        read_record.quality = Some(fastq_ascii_to_phred(record.qual())?);
+
         if let Err(e) = sender.send(read_record) {
             eprintln!("Failed to send: {}", e);
             break;
@@ -172,4 +196,22 @@ pub fn read_sequences_to_queue<P: AsRef<Path>>(
         "bam" => read_bam_2_queue(path, sender),
         _ => Err("unsupported input format".into()),
     }
+}
+
+fn fastq_ascii_to_phred(qual: &[u8]) -> Result<Vec<u8>> {
+    qual.iter()
+        .map(|&q| {
+            q.checked_sub(33)
+                .ok_or_else(|| anyhow!("invalid FASTQ quality byte: {q}"))
+        })
+        .collect()
+}
+
+fn phred_to_fastq_ascii(qual: &[u8]) -> Result<Vec<u8>> {
+    qual.iter()
+        .map(|&q| {
+            q.checked_add(33)
+                .ok_or_else(|| anyhow!("PHRED too large to encode as FASTQ ASCII: {q}"))
+        })
+        .collect()
 }

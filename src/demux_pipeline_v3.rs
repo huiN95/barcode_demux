@@ -5,12 +5,12 @@ use crate::core_context::BarcodePair;
 use crate::find_pattern::get_pattern_keys;
 use crate::get_demuxed_reads::RecordType;
 // use crate::multiple_barcode_demuxer_v1::multiple_barcode_demuxer_v1;
+use crate::bam_record_extention::ReadRecord;
+use crate::core_context::BarcodeCandidate;
+use crate::io_utils::normalize_barcode_name;
 use crate::writer_worker::write_barcode_results;
 use crossbeam::channel::{Receiver, Sender};
 use std::error::Error;
-
-use crate::bam_record_extention::ReadRecord;
-// use crate::core_context::{Annotated, BarcodeCandidate, PrimerMeta};
 // use crate::find_pattern::merge_non_overlapping_no_copy;
 use crate::get_demuxed_reads::prepare_record_to_writer;
 
@@ -33,7 +33,7 @@ use anyhow::Result;
 use crossbeam::channel::bounded;
 use std::collections::HashMap;
 
-pub fn demux_pipeline_v2(cli: &Cli) -> Result<(), Box<dyn Error>> {
+pub fn demux_pipeline_v3(cli: &Cli) -> Result<(), Box<dyn Error>> {
     ensure_output_dir(&cli.output_folder)?;
     let patterns = read_sequences(&cli.barcode)?;
 
@@ -57,9 +57,6 @@ pub fn demux_pipeline_v2(cli: &Cli) -> Result<(), Box<dyn Error>> {
         // b) 多个 demux 线程
         // ---------------------------
         // let worker_count = 20;
-        // let worker_count = thread::available_parallelism()
-        //     .map(|n| n.get().saturating_sub(cli.reservesed_threads.into())) // 减去 4，不小于 0
-        //     .unwrap_or(1);
         let worker_count: usize = match cli.threads {
             0 => std::thread::available_parallelism()
                 .map(|n| n.get())
@@ -127,7 +124,7 @@ pub fn demux_pipeline_v2(cli: &Cli) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub fn demux_reads_by_multiple_barcode(
+fn demux_reads_by_multiple_barcode(
     patterns: &[ReadRecord],
     max_distance: u8,
     receiver: Receiver<ReadRecord>,
@@ -148,7 +145,7 @@ pub fn demux_reads_by_multiple_barcode(
         //     counter!("filtered_reads_too_short").increment(1 as u64);
 
         // print!("max primer tolerance: {}", max_primer_distance);
-        let barcode_info = multiple_barcode_demuxer_v1(
+        let barcode_info = multiple_barcode_demuxer_v3(
             min_subread_len,
             max_distance,
             &mut barcode_f_myers,
@@ -175,93 +172,116 @@ pub fn demux_reads_by_multiple_barcode(
     Ok(())
 }
 
-pub fn multiple_barcode_demuxer_v1(
+pub fn multiple_barcode_demuxer_v3(
     min_read_length: usize,
     max_edit_distance: u8,
-
     barcode_f_pattern: &mut HashMap<Arc<str>, MayersPattern>,
     barcode_r_pattern: &mut HashMap<Arc<str>, MayersPattern>,
     target: &ReadRecord,
     search_bound: usize,
     single_end_filter: bool,
 ) -> Result<Option<BarcodePair>> {
-    // let mut result: Vec<BarcodePair> = Vec::<BarcodePair>::new();
-    // 如果序列长度小于等于2倍的intial_primer_check_len, 直接返回空结果
+    use std::collections::HashMap;
+
     let read_len = target.sequence.len();
     if read_len <= 2 * min_read_length {
-        counter!("len_fail").increment(1 as u64);
+        counter!("len_fail").increment(1);
         return Ok(None);
     }
-
-    // let mut all_primer_pos = IndexMap::<Arc<str>, Vec<BarcodeCandidate>>::new();
-    // let mut leading_primer_pos = Vec::<BarcodeCandidate>::new();
-
-    // loop all the patterns, to see which one is the best match
+    let updated_search_bound = search_bound.min(read_len / 2);
     let leading_keys: Vec<_> = barcode_f_pattern.keys().cloned().collect();
-    // leading_keys.sort();
-
-    // println!("primer demux: {:?} patterns found, ", keys,);
-    // for (name, myers) in inside_patterns_myers.iter_mut() {
     let mut leading_candidates = Vec::new();
     for name in leading_keys.iter() {
-        // println!("primer name {name}");
         let myers = barcode_f_pattern.get_mut(name).unwrap();
-
         if let Some(candidate) = barcode_alignment(
             name.clone(),
             myers,
-            &target.sequence[0..search_bound],
+            &target.sequence[0..updated_search_bound],
             max_edit_distance,
         )? {
             leading_candidates.push(candidate);
         }
     }
-    // let leading_primer_pos = merge_non_overlapping_no_copy(&mut candidates);
 
     let trailing_keys: Vec<_> = barcode_r_pattern.keys().cloned().collect();
-    // trailing_keys.sort();
-    // let mut trailing_primer_pos = Vec::<BarcodeCandidate>::new();
     let mut trailing_candidates = Vec::new();
-
     for name in trailing_keys.iter() {
-        let myers: &mut MayersPattern = barcode_r_pattern.get_mut(name).unwrap();
-
+        let myers = barcode_r_pattern.get_mut(name).unwrap();
         if let Some(candidate) = barcode_alignment(
             name.clone(),
             myers,
-            &target.sequence[target.sequence.len() - search_bound..target.sequence.len()],
+            &target.sequence[read_len.saturating_sub(updated_search_bound)..read_len],
             max_edit_distance,
         )? {
             trailing_candidates.push(candidate);
         }
-        // 理论上都不应该有重叠
     }
 
-    if trailing_candidates.len() >= 1 && leading_candidates.len() >= 1 {
-        trailing_candidates.sort_by_key(|n| n.distance);
-        leading_candidates.sort_by_key(|n| n.distance);
-        if trailing_candidates[0].name == leading_candidates[0].name {
-            counter!("len_ok_pair_ok").increment(1);
-            let result = BarcodePair {
-                name: trailing_candidates[0].name.clone(),
-                distance: (
-                    leading_candidates[0].distance,
-                    trailing_candidates[0].distance,
-                ),
-                inner_position: (
-                    leading_candidates[0].end,
-                    read_len - search_bound + trailing_candidates[0].start,
-                ),
-                outter_position: (
-                    leading_candidates[0].start,
-                    read_len - search_bound + trailing_candidates[0].end,
-                ),
-            };
-            return Ok(Some(result));
-        } else {
+    // 只有双端都有候选时才尝试配对
+    if !trailing_candidates.is_empty() && !leading_candidates.is_empty() {
+        // 每个 name 在 leading 中只保留最小 distance
+        let mut best_leading: HashMap<Arc<str>, BarcodeCandidate> = HashMap::new();
+        for c in leading_candidates.iter() {
+            match best_leading.get_mut(&c.name) {
+                Some(old) => {
+                    if c.distance < old.distance {
+                        *old = c.clone();
+                    }
+                }
+                None => {
+                    best_leading.insert(c.name.clone(), c.clone());
+                }
+            }
+        }
+
+        // 每个 name 在 trailing 中只保留最小 distance
+        let mut best_trailing: HashMap<Arc<str>, BarcodeCandidate> = HashMap::new();
+        for c in trailing_candidates.iter() {
+            match best_trailing.get_mut(&c.name) {
+                Some(old) => {
+                    if c.distance < old.distance {
+                        *old = c.clone();
+                    }
+                }
+                None => {
+                    best_trailing.insert(c.name.clone(), c.clone());
+                }
+            }
+        }
+
+        // 只比较两边共有的 name
+        let mut shared_pairs: Vec<(BarcodeCandidate, BarcodeCandidate, u16)> = Vec::new();
+        for (name, lead) in best_leading.iter() {
+            if let Some(trail) = best_trailing.get(name) {
+                let total_distance = lead.distance as u16 + trail.distance as u16;
+                shared_pairs.push((lead.clone(), trail.clone(), total_distance));
+            }
+        }
+
+        // 没有共有 key
+        if shared_pairs.is_empty() {
             counter!("len_ok_pair_fail").increment(1);
             return Ok(None);
         }
+
+        shared_pairs.sort_by_key(|x| x.2);
+
+        // 最优并列，放弃
+        if shared_pairs.len() >= 2 && shared_pairs[0].2 == shared_pairs[1].2 {
+            counter!("len_ok_pair_fail_score_tie").increment(1);
+            return Ok(None);
+        }
+
+        let (lead, trail, _) = &shared_pairs[0];
+
+        counter!("len_ok_pair_ok").increment(1);
+        let result = BarcodePair {
+            name: normalize_barcode_name(lead.name.as_ref()),
+            distance: (lead.distance, trail.distance),
+            inner_position: (lead.end, read_len - updated_search_bound + trail.start),
+            outter_position: (lead.start, read_len - updated_search_bound + trail.end),
+        };
+        return Ok(Some(result));
     } else if trailing_candidates.len() >= 1 && leading_candidates.len() == 0 && !single_end_filter
     {
         trailing_candidates.sort_by_key(|n| n.distance);
@@ -294,31 +314,7 @@ pub fn multiple_barcode_demuxer_v1(
         return Ok(None);
     }
 
-    // if trailing_candidates.len() == 1 && leading_candidates.len() == 1 {
-    //     if trailing_candidates[0].name == leading_candidates[0].name {
-    //         counter!("reads with barcodes").increment(1);
-    //         let result = BarcodePair {
-    //             name: trailing_candidates[0].name.clone(),
-    //             distance: (
-    //                 leading_candidates[0].distance,
-    //                 trailing_candidates[0].distance,
-    //             ),
-    //             inner_position: (
-    //                 leading_candidates[0].end,
-    //                 read_len - search_bound + trailing_candidates[0].start,
-    //             ),
-    //             outter_position: (
-    //                 leading_candidates[0].start,
-    //                 read_len - search_bound + trailing_candidates[0].end,
-    //             ),
-    //         };
-    //         return Ok(Some(result));
-    //     } else {
-    //         counter!("barcode_not_paired").increment(1);
-    //         return Ok(None);
-    //     }
-    // } else {
-    //     counter!("failed_to_demux_barcode").increment(1);
-    //     return Ok(None);
-    // }
+    // 只要不是双端成功配对，一律返回 None
+    // counter!("len_ok_score_fail").increment(1);
+    // Ok(None)
 }

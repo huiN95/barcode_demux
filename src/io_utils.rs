@@ -10,13 +10,13 @@ use rust_htslib::bam::Reader as BAMReader;
 use rust_htslib::bam::{self, Read};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, BufReader};
+use std::io::{self, BufRead, BufReader};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use csv::ReaderBuilder;
 use serde::Serialize;
-
 // pub type SharedWriter = Arc<Mutex<Box<dyn ReadWriter + Send>>>;
 
 // main writer 是独占的；uncertain 是共享的
@@ -34,6 +34,7 @@ pub fn read_sequences(input_path: &str) -> Result<Vec<ReadRecord>, anyhow::Error
     match ext.as_str() {
         "fa" | "fasta" => read_fasta_sequences(input_path),
         "fq" | "fastq" => read_fastq_sequences(input_path),
+        "csv" | "tsv" => read_barcode_table(input_path),
         "bam" => read_bam_sequences(input_path),
         _ => bail!("不支持的输入格式：{ext}"),
     }
@@ -284,7 +285,8 @@ pub fn make_writers(
 
     for name in input_names {
         // 建议 sanitize，防止 primer 名里有 / 空格 等导致路径问题
-        let safe_name = sanitize_filename(&name); // 你工程里已有的话就用；否则自己实现
+        let safe_name = normalize_barcode_name(&sanitize_filename(&name)).to_string();
+        // 你工程里已有的话就用；否则自己实现
         let main_path = out_dir.join(format!("{safe_name}.{out_ext}"));
 
         let main_writer: Box<dyn ReadWriter + Send> = match out_ext {
@@ -339,117 +341,6 @@ fn make_header<P: AsRef<Path>>(input: P) -> bam::Header {
     header
 }
 
-// pub enum OutputFormat {
-//     Jsonl,
-//     Tsv,
-// }
-// pub fn detect_format_from_path(path: &Path) -> io::Result<OutputFormat> {
-//     let fname = path
-//         .file_name()
-//         .and_then(|s| s.to_str())
-//         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid filename"))?
-//         .to_ascii_lowercase();
-
-//     if fname.ends_with(".jsonl") {
-//         Ok(OutputFormat::Jsonl)
-//     } else if fname.ends_with(".tsv") {
-//         Ok(OutputFormat::Tsv)
-//     } else {
-//         Err(io::Error::new(
-//             io::ErrorKind::InvalidInput,
-//             "filename must end with .jsonl or .tsv",
-//         ))
-//     }
-// }
-
-// /// 行写入器（纯文本，无压缩）
-// pub enum LineSink {
-//     Jsonl {
-//         inner: BufWriter<File>,
-//     },
-//     Tsv {
-//         inner: BufWriter<File>,
-//         wrote_header: bool,
-//     },
-// }
-
-// pub fn open_line_sink(path: &Path) -> io::Result<LineSink> {
-//     let fmt = detect_format_from_path(path)?;
-//     let f = File::create(path)?;
-//     let inner = BufWriter::new(f);
-//     Ok(match fmt {
-//         OutputFormat::Jsonl => LineSink::Jsonl { inner },
-//         OutputFormat::Tsv => LineSink::Tsv {
-//             inner,
-//             wrote_header: false,
-//         },
-//     })
-// }
-// /// TSV 首行表头（只写一次）
-// fn write_header_if_needed(sink: &mut LineSink) -> io::Result<()> {
-//     if let LineSink::Tsv {
-//         inner,
-//         wrote_header,
-//     } = sink
-//     {
-//         if !*wrote_header {
-//             inner.write_all(b"primer_id\tchannel_idx\tprimer_distance\tsingle_end\n")?;
-//             *wrote_header = true;
-//         }
-//     }
-//     Ok(())
-// }
-
-// #[derive(Serialize)]
-// pub struct CompactRec {
-//     pub b: String, // barcode_index
-//     pub c: i32,    // channel_idx
-//     pub d: u16,    // distance_scaled (e.g., 1.5 -> 15)
-//     pub s: u8,     // single_end: 1/0
-// }
-// #[inline]
-// pub fn to_compact_rec(
-//     primer_idx: String,
-//     channel_idx: i32,
-//     distance: f32,
-//     single_end: bool,
-//     distance_scale: u16, // 通常 10
-// ) -> CompactRec {
-//     let d_scaled = (distance * distance_scale as f32).round() as u16;
-//     CompactRec {
-//         b: primer_idx,
-//         c: channel_idx,
-//         d: d_scaled,
-//         s: if single_end { 1 } else { 0 },
-//     }
-// }
-
-// /// 写一条记录
-// pub fn write_record(sink: &mut LineSink, rec: &CompactRec) -> io::Result<()> {
-//     match sink {
-//         LineSink::Jsonl { inner } => {
-//             serde_json::to_writer(&mut *inner, rec)?;
-//             inner.write_all(b"\n")?;
-//         }
-//         LineSink::Tsv { .. } => {
-//             write_header_if_needed(sink)?;
-//             if let LineSink::Tsv { inner, .. } = sink {
-//                 // b  c  d  s
-//                 write!(inner, "{}\t{}\t{}\t{}\n", rec.b, rec.c, rec.d, rec.s)?;
-//             }
-//         }
-//     }
-//     Ok(())
-// }
-
-// /// flush（可选显式调用）
-// pub fn flush_sink(sink: &mut LineSink) -> io::Result<()> {
-//     match sink {
-//         LineSink::Jsonl { inner } => inner.flush(),
-//         LineSink::Tsv { inner, .. } => inner.flush(),
-//     }
-// }
-
 pub fn ensure_output_dir(output_folder: &str) -> anyhow::Result<()> {
     let p = Path::new(output_folder);
 
@@ -466,4 +357,164 @@ pub fn ensure_output_dir(output_folder: &str) -> anyhow::Result<()> {
     std::fs::create_dir_all(p)
         .with_context(|| format!("failed to create output_folder: {}", p.display()))?;
     Ok(())
+}
+
+pub fn read_barcode_table(input_path: &str) -> Result<Vec<ReadRecord>> {
+    let delimiter = if input_path.ends_with(".tsv") {
+        b'\t'
+    } else {
+        b','
+    };
+
+    let file =
+        File::open(input_path).with_context(|| format!("failed to open file: {input_path}"))?;
+
+    let mut reader = ReaderBuilder::new()
+        .delimiter(delimiter)
+        .has_headers(false)
+        .from_reader(file);
+
+    let mut records = Vec::new();
+
+    for result in reader.records() {
+        let record = result?;
+
+        if record.len() < 3 {
+            continue;
+        }
+
+        let name = record[0].trim();
+        let seq_5 = record[1].trim();
+        let seq_3 = record[2].trim();
+
+        let seq_5_bytes = seq_5.as_bytes().to_vec();
+        let seq_3_bytes = seq_3.as_bytes().to_vec();
+        // let rc_seq_5 = reverse_complement(seq_5.as_bytes());
+        // let rc_seq_3 = reverse_complement(seq_3.as_bytes());
+
+        // let rc_seq_5 = seq_3.as_bytes().to_vec();
+        // let rc_seq_3 = seq_5.as_bytes().to_vec();
+
+        let mut forward_record = ReadRecord::default();
+        forward_record.id = format!("{name}_F").into();
+        forward_record.sequence = seq_5_bytes.clone();
+        records.push(forward_record);
+
+        let mut reverse_record = ReadRecord::default();
+        reverse_record.id = format!("{name}_R").into();
+        reverse_record.sequence = seq_3_bytes.clone();
+        records.push(reverse_record);
+
+        let mut forward_reverse_record = ReadRecord::default();
+        forward_reverse_record.id = format!("{name}_R_R").into();
+        // forward_reverse_record.sequence = rc_seq_3;
+        forward_reverse_record.sequence = seq_5_bytes.clone();
+
+        records.push(forward_reverse_record);
+
+        let mut reverse_forward_record = ReadRecord::default();
+        reverse_forward_record.id = format!("{name}_R_F").into();
+        // reverse_forward_record.sequence = rc_seq_5;
+        reverse_forward_record.sequence = seq_3_bytes;
+
+        records.push(reverse_forward_record);
+    }
+
+    Ok(records)
+}
+
+fn reverse_complement(seq: &[u8]) -> Vec<u8> {
+    seq.iter()
+        .rev()
+        .map(|&b| match b {
+            b'A' => b'T',
+            b'T' => b'A',
+            b'C' => b'G',
+            b'G' => b'C',
+            b'a' => b't',
+            b't' => b'a',
+            b'c' => b'g',
+            b'g' => b'c',
+            b'R' => b'Y',
+            b'Y' => b'R',
+            b'M' => b'K',
+            b'K' => b'M',
+            b'S' => b'S',
+            b'W' => b'W',
+            b'B' => b'V',
+            b'V' => b'B',
+            b'D' => b'H',
+            b'H' => b'D',
+            b'N' => b'N',
+            b'r' => b'y',
+            b'y' => b'r',
+            b'm' => b'k',
+            b'k' => b'm',
+            b's' => b's',
+            b'w' => b'w',
+            b'b' => b'v',
+            b'v' => b'b',
+            b'd' => b'h',
+            b'h' => b'd',
+            b'n' => b'n',
+            _ => b'N',
+        })
+        .collect()
+}
+
+fn complement(seq: &[u8]) -> Vec<u8> {
+    seq.iter()
+        .map(|&b| match b {
+            b'A' => b'T',
+            b'T' => b'A',
+            b'C' => b'G',
+            b'G' => b'C',
+            b'a' => b't',
+            b't' => b'a',
+            b'c' => b'g',
+            b'g' => b'c',
+
+            b'R' => b'Y',
+            b'Y' => b'R',
+            b'M' => b'K',
+            b'K' => b'M',
+            b'S' => b'S',
+            b'W' => b'W',
+            b'B' => b'V',
+            b'V' => b'B',
+            b'D' => b'H',
+            b'H' => b'D',
+            b'N' => b'N',
+
+            b'r' => b'y',
+            b'y' => b'r',
+            b'm' => b'k',
+            b'k' => b'm',
+            b's' => b's',
+            b'w' => b'w',
+            b'b' => b'v',
+            b'v' => b'b',
+            b'd' => b'h',
+            b'h' => b'd',
+            b'n' => b'n',
+
+            _ => b'N',
+        })
+        .collect()
+}
+
+pub fn normalize_barcode_name(name: &str) -> Arc<str> {
+    let mut s = name;
+
+    loop {
+        if let Some(stripped) = s.strip_suffix("_F") {
+            s = stripped;
+        } else if let Some(stripped) = s.strip_suffix("_R") {
+            s = stripped;
+        } else {
+            break;
+        }
+    }
+
+    Arc::<str>::from(s)
 }

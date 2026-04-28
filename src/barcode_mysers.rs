@@ -217,37 +217,34 @@ pub fn get_myers_from_barcodes(
         })
         .collect()
 }
-// patterns
-//     .iter()
-//     .filter_map(|r| {
-//         let id = r.id.as_ref();
 
-//         let pattern = r.sequence.as_slice();
-//         let is_l = if id.ends_with("_F") {
-//             true
-//         } else if id.ends_with("_R") {
-//             false
-//         } else {
-//             // 此时应该panic，这个pattern不符合预设
-//             return None;
-//         };
+pub fn get_two_directions_myers_from_barcodes(
+    patterns: &[ReadRecord],
+    direction: Direction,
+) -> HashMap<Arc<str>, MayersPattern> {
+    let mut builder = MyersBuilder::new();
+    for &(base, equivalents) in AMBIGS {
+        builder.ambig(base, equivalents);
+    }
 
-//         // 根据方向 + 后缀决定是否取 revcomp
-//         let need_revcomp = match (direction, is_l) {
-//             (Direction::Forward, true) => false,
-//             (Direction::Forward, false) => false, // _L: Forward 原序列
-//             (Direction::Reverse, true) => true,   // _L: Reverse revcomp
-//             (Direction::Reverse, false) => true,  // _T: Forward revcomp
-//         };
+    let suffix = match direction {
+        Direction::Forward => "_F",
+        Direction::Reverse => "_R",
+    };
 
-//         let myers = if need_revcomp {
-//             let rc = revcomp_iupac(pattern);
-//             build_myers_enum(&builder, &rc)
-//         } else {
-//             build_myers_enum(&builder, pattern)
-//         };
+    patterns
+        .iter()
+        .filter_map(|r| {
+            let id = r.id.as_ref(); // &str
 
-//         // ✅ key 用原始 id（包含 _L/_T），避免重名覆盖
-//         Some((Arc::<str>::from(id), myers))
-//     })
-//     .collect()
+            // 既做过滤，也拿到去掉后缀后的 key
+            let key = id.strip_suffix(suffix)?;
+
+            let pattern = r.sequence.as_slice();
+            let myers = build_myers_enum(&builder, pattern);
+
+            Some((Arc::<str>::from(key), myers))
+            // 如果你想避免分配，也可以：Arc::<str>::from(key.to_owned())
+        })
+        .collect()
+}

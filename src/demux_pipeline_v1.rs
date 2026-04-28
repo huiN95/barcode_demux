@@ -41,9 +41,18 @@ pub fn demux_pipeline_v1(cli: &Cli) -> Result<(), Box<dyn Error>> {
         // b) 多个 demux 线程
         // ---------------------------
         // let worker_count = 20;
-        let worker_count = thread::available_parallelism()
-            .map(|n| n.get().saturating_sub(cli.reservesed_threads.into())) // 减去 4，不小于 0
-            .unwrap_or(1);
+        // let worker_count = thread::available_parallelism()
+        //     .map(|n| n.get().saturating_sub(cli.reservesed_threads.into())) // 减去 4，不小于 0
+        //     .unwrap_or(1);
+        // let worker_count = cli.threads;
+        let worker_count: usize = match cli.threads {
+            0 => std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1)
+                .saturating_sub(2)
+                .max(1),
+            n => n as usize,
+        };
         // .min(1)
         // .max(1); // .unwrap_or(1); // 获取失败时默认 1
         //                // .max(1)

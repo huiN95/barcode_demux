@@ -83,6 +83,67 @@ fn get_subreads_from_demuxed_result(
             return Ok((RecordType::Fasta(fasta_rec), bc_opt));
         }
         // ---------- FASTQ ----------
+        // "fq" | "fastq" => {
+        //     let (name, start, end, bc_opt) = match barcode_position {
+        //         Some(bc) => {
+        //             let (s, e) = bc.inner_position;
+        //             let len_ok = e.saturating_sub(s) >= min_subread_len;
+
+        //             let q_ok = if len_ok {
+        //                 let q_slice = rec
+        //                     .quality
+        //                     .as_deref()
+        //                     .ok_or_else(|| anyhow::anyhow!("missing quality"))?
+        //                     .get(s..e)
+        //                     .ok_or_else(|| {
+        //                         anyhow::anyhow!(
+        //                             "channel {} has bad range qual: {}..{} with length {}",
+        //                             rec.id,
+        //                             s,
+        //                             e,
+        //                             rec.sequence.len()
+        //                         )
+        //                     })?;
+        //                 let channel_q = channel_q_from_base_q(q_slice)?;
+        //                 channel_q >= q_threshold as f32
+        //             } else {
+        //                 // counter!("q_lower_than_threshold").increment(1);
+        //                 // histogram!("q_threshold_value").record(q_threshold as f64);
+        //                 false
+        //             };
+        //             if q_ok && len_ok {
+        //                 (make_name(&rec.id, bc.name.as_ref(), s, e), s, e, Some(bc))
+        //             } else {
+        //                 counter!("filtered_by_length_or_q").increment(1);
+
+        //                 (
+        //                     make_name(&rec.id, "uncertain", 0, rec.sequence.len()),
+        //                     0,
+        //                     rec.sequence.len(),
+        //                     None,
+        //                 )
+        //             }
+        //         }
+        //         None => (
+        //             make_name(&rec.id, "uncertain", 0, rec.sequence.len()),
+        //             0,
+        //             rec.sequence.len(),
+        //             None,
+        //         ),
+        //     };
+        //     let fastq_rec = fastq::Record::with_attrs(
+        //         &name,                     // &str
+        //         None,                      // description/comment
+        //         &rec.sequence[start..end], // &[u8]
+        //         rec.quality
+        //             .as_deref() // Option<&[u8]>
+        //             .expect("missing quality")
+        //             .get(start..end) // Option<&[u8]> 取子片段
+        //             .ok_or_else(|| anyhow::anyhow!("bad range fastq_rec: {}..{}", start, end))?, // quality: Option<&[u8]>
+        //                                                                                          // .as_ref(),
+        //     );
+        //     return Ok((RecordType::Fastq(fastq_rec), bc_opt));
+        // }
         "fq" | "fastq" => {
             let (name, start, end, bc_opt) = match barcode_position {
                 Some(bc) => {
@@ -90,24 +151,17 @@ fn get_subreads_from_demuxed_result(
                     let len_ok = e.saturating_sub(s) >= min_subread_len;
 
                     let q_ok = if len_ok {
-                        let q_slice = rec
-                            .quality
-                            .as_deref()
-                            .ok_or_else(|| anyhow::anyhow!("missing quality"))?
-                            .get(s..e)
-                            .ok_or_else(|| anyhow::anyhow!("bad range: {}..{}", s, e))?;
-                        let channel_q = channel_q_from_fastq_ascii(q_slice)?;
+                        let q_slice = get_qual_slice(rec, s, e)?;
+                        let channel_q = channel_q_from_base_q(q_slice)?; // 这里假设函数吃的是裸 PHRED
                         channel_q >= q_threshold as f32
                     } else {
-                        // counter!("q_lower_than_threshold").increment(1);
-                        // histogram!("q_threshold_value").record(q_threshold as f64);
                         false
                     };
+
                     if q_ok && len_ok {
                         (make_name(&rec.id, bc.name.as_ref(), s, e), s, e, Some(bc))
                     } else {
-                        counter!("filtered_by_length_or_q").increment(1);
-
+                        counter!("len_ok_pair_ok_q_or_length_failed").increment(1);
                         (
                             make_name(&rec.id, "uncertain", 0, rec.sequence.len()),
                             0,
@@ -123,17 +177,22 @@ fn get_subreads_from_demuxed_result(
                     None,
                 ),
             };
-            let fastq_rec = fastq::Record::with_attrs(
-                &name,                     // &str
-                None,                      // description/comment
-                &rec.sequence[start..end], // &[u8]
-                rec.quality
-                    .as_deref() // Option<&[u8]>
-                    .expect("missing quality")
-                    .get(start..end) // Option<&[u8]> 取子片段
-                    .ok_or_else(|| anyhow::anyhow!("bad range: {}..{}", start, end))?, // quality: Option<&[u8]>
-                                                                                       // .as_ref(),
-            );
+
+            let seq_slice = rec.sequence.get(start..end).ok_or_else(|| {
+                anyhow!(
+                    "channel {} has bad range seq: {}..{} with seq length {}",
+                    rec.id,
+                    start,
+                    end,
+                    rec.sequence.len()
+                )
+            })?;
+
+            let qual_phred = get_qual_slice(rec, start, end)?;
+            let qual_ascii = phred_to_fastq_ascii(qual_phred)?;
+
+            let fastq_rec = fastq::Record::with_attrs(&name, None, seq_slice, &qual_ascii);
+
             return Ok((RecordType::Fastq(fastq_rec), bc_opt));
         }
         // ---------- BAM ----------
@@ -163,7 +222,7 @@ fn get_subreads_from_demuxed_result(
                     if q_ok && len_ok {
                         (make_name(&rec.id, bc.name.as_ref(), s, e), s, e, Some(bc))
                     } else {
-                        counter!("filtered_by_length_or_q").increment(1);
+                        counter!("len_ok_pair_ok_q_or_length_failed").increment(1);
 
                         (
                             make_name(&rec.id, "uncertain", 0, rec.sequence.len()),
@@ -219,7 +278,7 @@ fn get_subreads_from_demuxed_result(
     }
 }
 
-pub fn channel_q_from_fastq_ascii(q_ascii: &[u8]) -> anyhow::Result<f32> {
+pub fn channel_q_from_fastq_ascii(q_ascii: &[u8]) -> Result<f32> {
     anyhow::ensure!(!q_ascii.is_empty(), "empty qual");
     let mut sum_p = 0.0f64;
 
@@ -251,4 +310,121 @@ pub fn channel_q_from_base_q(qs: &[u8]) -> Result<f32> {
     // 防止 log10(0)
     let p_mean = p_mean.max(1e-300);
     Ok(-10.0 * p_mean.log10())
+}
+
+fn get_demuxed_mixed_reads(
+    rec: &ReadRecord,
+    barcode_position: Option<BarcodePair>,
+    min_subread_len: usize,
+    q_threshold: usize,
+    output_format: &str,
+) -> anyhow::Result<(RecordType, Option<BarcodePair>)> {
+    match output_format {
+        // ---------- BAM ----------
+        "bam" => {
+            // let channel_num = rec.id.split('_').nth(1).unwrap_or("0").parse().unwrap_or(0);
+            let channel_num = rec.ch.unwrap_or(0);
+            let mut read_q = 7.0;
+            let (name, start, end, bc_opt) = match barcode_position {
+                Some(bc) => {
+                    let (s, e) = bc.inner_position;
+                    let len_ok = e.saturating_sub(s) >= min_subread_len;
+
+                    let q_ok = if len_ok {
+                        let q_slice = rec
+                            .quality
+                            .as_deref()
+                            .ok_or_else(|| anyhow::anyhow!("missing quality"))?
+                            .get(s..e)
+                            .ok_or_else(|| anyhow::anyhow!("bad range: {}..{}", s, e))?;
+                        read_q = channel_q_from_base_q(q_slice)?;
+                        read_q >= q_threshold as f32
+                    } else {
+                        // counter!("q_lower_than_threshold").increment(1);
+                        // histogram!("q_threshold_value").record(q_threshold as f64);
+                        false
+                    };
+                    if q_ok && len_ok {
+                        (make_name(&rec.id, bc.name.as_ref(), s, e), s, e, Some(bc))
+                    } else {
+                        counter!("len_ok_pair_ok_q_or_length_failed").increment(1);
+
+                        (
+                            make_name(&rec.id, "uncertain", 0, rec.sequence.len()),
+                            0,
+                            rec.sequence.len(),
+                            None,
+                        )
+                    }
+                }
+                None => (
+                    make_name(&rec.id, "uncertain", 0, rec.sequence.len()),
+                    0,
+                    rec.sequence.len(),
+                    None,
+                ),
+            };
+            // 头部的数据够长才行
+
+            let mut bam_rec = bam::Record::new();
+
+            bam_rec.set(
+                name.as_bytes(),
+                None,
+                &rec.sequence[start..end],
+                rec.quality
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("missing quality"))?
+                    .get(start..end)
+                    .ok_or_else(|| anyhow::anyhow!("bad range: {}..{}", start, end))?,
+            ); // 第 2 个参数是 CIGAR 向量
+            bam_rec.set_flags(0x4);
+
+            bam_rec.push_aux(b"ch", Aux::I32(channel_num)).unwrap();
+            bam_rec.push_aux(b"RG", Aux::String("0425")).unwrap();
+            bam_rec
+                .push_aux(b"rq", Aux::Float(rec.rq.unwrap_or(0.777)))
+                .unwrap();
+            bam_rec.push_aux(b"cq", Aux::Float(read_q as f32)).unwrap();
+            bam_rec
+                .push_aux(b"np", Aux::I32(rec.np.unwrap_or(0)))
+                .unwrap();
+
+            let start_end_position = vec![start as u32, end as u32];
+
+            bam_rec
+                .push_aux(b"be", Aux::ArrayU32((&start_end_position[..]).into()))
+                .unwrap();
+            return Ok((RecordType::BAM(bam_rec), bc_opt));
+        }
+
+        // ---------- 其他格式 ----------
+        _ => anyhow::bail!("不支持的输出格式: {output_format}"),
+    }
+}
+
+fn phred_to_fastq_ascii(qual: &[u8]) -> Result<Vec<u8>> {
+    qual.iter()
+        .map(|&q| {
+            q.checked_add(33)
+                .ok_or_else(|| anyhow!("PHRED too large to encode as FASTQ ASCII: {}", q))
+        })
+        .collect()
+}
+
+fn get_qual_slice<'a>(rec: &'a ReadRecord, start: usize, end: usize) -> Result<&'a [u8]> {
+    let qual = rec
+        .quality
+        .as_deref()
+        .ok_or_else(|| anyhow!("channel {} missing quality", rec.id))?;
+
+    qual.get(start..end).ok_or_else(|| {
+        anyhow!(
+            "channel {} has bad range qual: {}..{} with qual length {}",
+            rec.id,
+            start,
+            end,
+            qual.len()
+        )
+    })
 }

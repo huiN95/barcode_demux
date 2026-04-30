@@ -24,21 +24,21 @@ variables:
 
   REFS_DIR: /data/CI_CD_DATASETS/REF_GENOMES
 
-  # 上一次正式打包版本，用作 no-diff 基准
+  # 上一次正式发布版本，用作 no-diff 对照
   STABLE_TAG: stable
 
 
 # ===============================
 # 1. 构建临时镜像
-# main / branch / tag 都构建
-# web 手动触发默认不跑
+# branch / main / tag 都会构建
+# web 手动触发不跑
 # ===============================
 
 build_temp_image:
   stage: build_temp_image
   script:
-    - echo `whoami`
-    - echo "📦 Building temp image..."
+    - whoami
+    - echo "Building temp image"
     - DOCKER_BUILDKIT=1 docker build -t ${PROJECT_NAME}:${TEMP_TAG} .
     - docker images | grep ${PROJECT_NAME} || true
   rules:
@@ -49,7 +49,7 @@ build_temp_image:
 
 # ===============================
 # 2. 冒烟测试
-# 只测试当前临时镜像是否能正常跑
+# 只测试当前临时镜像
 # ===============================
 
 adapter_smoke_test:
@@ -57,10 +57,15 @@ adapter_smoke_test:
   needs:
     - build_temp_image
   script:
-    - echo `whoami`
-    - echo "🔥 Smoke testing temp image..."
-    - echo "冒烟测试文件目录：${BARCODE_SMOKE_TEST_DIR}"
-    - bash -c 'source ~/.bashrc && python -u python_scripts/run_barcode_test.py --test-file-dir ${BARCODE_SMOKE_TEST_DIR} --docker-image ${PROJECT_NAME}:${TEMP_TAG} --test-type smoke'
+    - whoami
+    - echo "Running smoke test"
+    - echo "Smoke test dataset = ${BARCODE_SMOKE_TEST_DIR}"
+    - >-
+      bash -c 'source ~/.bashrc &&
+      python -u python_scripts/run_barcode_test.py
+      --test-file-dir ${BARCODE_SMOKE_TEST_DIR}
+      --docker-image ${PROJECT_NAME}:${TEMP_TAG}
+      --test-type smoke'
   rules:
     - if: '$CI_PIPELINE_SOURCE == "web"'
       when: never
@@ -69,12 +74,12 @@ adapter_smoke_test:
 
 # ===============================
 # 3. no-diff 测试
-# 当前镜像 vs 上一次 stable 镜像
 #
-# 重点：
-# - pipeline-version 1
-# - output-format fastq
-# - 比较两个输出目录下 FASTQ 是否完全一致
+# 当前镜像 vs 上一次 stable 镜像
+# 重点测试：
+#   pipeline-version 1
+#   output-format fastq
+#   对比 FASTQ 输出是否完全一致
 # ===============================
 
 barcode_nodiff_test:
@@ -83,16 +88,22 @@ barcode_nodiff_test:
     - build_temp_image
     - adapter_smoke_test
   script:
-    - echo `whoami`
-    - echo "🔍 Running no-diff test..."
-    - echo "Current image：${PROJECT_NAME}:${TEMP_TAG}"
-    - echo "Stable image ：${CI_REGISTRY_IMAGE}:${STABLE_TAG}"
+    - whoami
+    - echo "Running no-diff test"
+    - echo "Current image = ${PROJECT_NAME}:${TEMP_TAG}"
+    - echo "Stable image = ${CI_REGISTRY_IMAGE}:${STABLE_TAG}"
 
-    # 确保 stable 镜像存在于本机
+    # 确保 stable 镜像存在
     - docker pull ${CI_REGISTRY_IMAGE}:${STABLE_TAG}
 
-    # 运行 no-diff 测试
-    - bash -c 'source ~/.bashrc && python -u python_scripts/run_barcode_test.py --test-file-dir ${BARCODE_SMOKE_TEST_DIR} --docker-image ${PROJECT_NAME}:${TEMP_TAG} --stable-image ${CI_REGISTRY_IMAGE}:${STABLE_TAG} --test-type no-diff'
+    # 当前镜像 vs stable 镜像
+    - >-
+      bash -c 'source ~/.bashrc &&
+      python -u python_scripts/run_barcode_test.py
+      --test-file-dir ${BARCODE_SMOKE_TEST_DIR}
+      --docker-image ${PROJECT_NAME}:${TEMP_TAG}
+      --stable-image ${CI_REGISTRY_IMAGE}:${STABLE_TAG}
+      --test-type no-diff'
   rules:
     - if: '$CI_PIPELINE_SOURCE == "web"'
       when: never
@@ -100,8 +111,13 @@ barcode_nodiff_test:
 
 
 # ===============================
-# 4. 预留 regression_test
-# 如果暂时没有额外 regression，可以先不启用
+# 4. regression 测试
+#
+# 如果你的 python_scripts/run_barcode_test.py 里
+# regression 已经包含 smoke + no-diff，
+# 可以启用这个 job。
+#
+# 当前先保留，不启用，避免重复跑。
 # ===============================
 
 # adapter_regression_test:
@@ -110,8 +126,18 @@ barcode_nodiff_test:
 #     - build_temp_image
 #     - adapter_smoke_test
 #   script:
-#     - echo "🧪 Running regression test..."
-#     - bash -c 'source ~/.bashrc && python -u python_scripts/run_barcode_test.py --test-file-dir ${BARCODE_SMOKE_TEST_DIR} --docker-image ${PROJECT_NAME}:${TEMP_TAG} --stable-image ${CI_REGISTRY_IMAGE}:${STABLE_TAG} --test-type regression'
+#     - whoami
+#     - echo "Running regression test"
+#     - echo "Current image = ${PROJECT_NAME}:${TEMP_TAG}"
+#     - echo "Stable image = ${CI_REGISTRY_IMAGE}:${STABLE_TAG}"
+#     - docker pull ${CI_REGISTRY_IMAGE}:${STABLE_TAG}
+#     - >-
+#       bash -c 'source ~/.bashrc &&
+#       python -u python_scripts/run_barcode_test.py
+#       --test-file-dir ${BARCODE_SMOKE_TEST_DIR}
+#       --docker-image ${PROJECT_NAME}:${TEMP_TAG}
+#       --stable-image ${CI_REGISTRY_IMAGE}:${STABLE_TAG}
+#       --test-type regression'
 #   rules:
 #     - if: '$CI_PIPELINE_SOURCE == "web"'
 #       when: never
@@ -120,7 +146,9 @@ barcode_nodiff_test:
 
 # ===============================
 # 5. tag 发版
-# 只有 tag pipeline 才推送正式镜像
+#
+# 只有 git tag pipeline 才会执行
+# 发版成功后，同时更新 stable
 # ===============================
 
 push_release:
@@ -130,9 +158,9 @@ push_release:
     - adapter_smoke_test
     - barcode_nodiff_test
   script:
-    - echo `whoami`
-    - echo "📤 Pushing release image..."
-    - echo "Release tag: ${RELEASE_TAG}"
+    - whoami
+    - echo "Pushing release image"
+    - echo "Release tag = ${RELEASE_TAG}"
 
     # 推送正式 release tag
     - docker tag ${PROJECT_NAME}:${TEMP_TAG} ${CI_REGISTRY_IMAGE}:${RELEASE_TAG}
@@ -142,9 +170,9 @@ push_release:
     - docker tag ${PROJECT_NAME}:${TEMP_TAG} ${CI_REGISTRY_IMAGE}:${STABLE_TAG}
     - docker push ${CI_REGISTRY_IMAGE}:${STABLE_TAG}
 
-    - echo "📤 Pushing release image DONE."
-    - echo "Release image: ${CI_REGISTRY_IMAGE}:${RELEASE_TAG}"
-    - echo "Stable image : ${CI_REGISTRY_IMAGE}:${STABLE_TAG}"
+    - echo "Pushing release image done"
+    - echo "Release image = ${CI_REGISTRY_IMAGE}:${RELEASE_TAG}"
+    - echo "Stable image = ${CI_REGISTRY_IMAGE}:${STABLE_TAG}"
   rules:
     - if: '$CI_COMMIT_TAG'
       when: on_success
@@ -152,7 +180,8 @@ push_release:
 
 # ===============================
 # 6. 打包 tar
-# 只有 tag pipeline 才执行
+#
+# 只有 tag pipeline 才会执行
 # ===============================
 
 package:
@@ -160,10 +189,12 @@ package:
   needs:
     - push_release
   script:
-    - echo "📦 Generating temporary package..."
+    - whoami
+    - echo "Generating docker image package"
     - docker pull ${CI_REGISTRY_IMAGE}:${RELEASE_TAG}
     - docker save -o ${PROJECT_NAME}-${RELEASE_TAG}.tar ${CI_REGISTRY_IMAGE}:${RELEASE_TAG}
     - mv ${PROJECT_NAME}-${RELEASE_TAG}.tar /dataLab/Geneus110/BC/共享文件夹/算法镜像/adacus
+    - echo "Package done"
   rules:
     - if: '$CI_COMMIT_TAG'
       when: on_success
@@ -171,7 +202,8 @@ package:
 
 # ===============================
 # 7. 推送到阿里云 ACR
-# 只有 tag pipeline 才执行
+#
+# 只有 tag pipeline 才会执行
 # ===============================
 
 push_ali:
@@ -179,10 +211,12 @@ push_ali:
   needs:
     - push_release
   script:
-    - echo "📤 Pushing release image to ali"
+    - whoami
+    - echo "Pushing release image to Aliyun ACR"
     - docker pull ${CI_REGISTRY_IMAGE}:${RELEASE_TAG}
     - docker tag ${CI_REGISTRY_IMAGE}:${RELEASE_TAG} ${ALI_ACR_REGISTRY_IMAGE}:${RELEASE_TAG}
     - docker push ${ALI_ACR_REGISTRY_IMAGE}:${RELEASE_TAG}
+    - echo "Push to Aliyun ACR done"
   rules:
     - if: '$CI_COMMIT_TAG'
       when: on_success

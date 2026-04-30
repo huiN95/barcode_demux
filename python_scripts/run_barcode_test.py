@@ -1,12 +1,15 @@
 import argparse
-import difflib
 import functools
-import hashlib
+import gzip
 import os
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
-from typing import Dict, Optional, Sequence
+from typing import Dict, Iterator, Optional, Sequence, Tuple
+
+
+FastqRecord = Tuple[str, str, str]
 
 
 def run(cmd: Sequence[str]) -> None:
@@ -18,7 +21,9 @@ def run(cmd: Sequence[str]) -> None:
 def run_capture(cmd: Sequence[str]) -> str:
     """
     Run command and capture stdout + stderr.
-    Do not raise on non-zero, because some --help implementations exit non-zero.
+
+    Do not raise on non-zero, because some --help implementations
+    may return non-zero while still printing useful help text.
     """
     p = subprocess.run(
         cmd,
@@ -30,26 +35,23 @@ def run_capture(cmd: Sequence[str]) -> str:
 
 
 def is_fastq_file(path: Path) -> bool:
+    """
+    Detect FASTQ files.
+
+    Supports:
+      .fastq
+      .fq
+      .fastq.gz
+      .fq.gz
+    """
     name = path.name.lower()
+
     return (
         name.endswith(".fastq")
         or name.endswith(".fq")
         or name.endswith(".fastq.gz")
         or name.endswith(".fq.gz")
     )
-
-
-def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
-    h = hashlib.sha256()
-
-    with path.open("rb") as f:
-        while True:
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-            h.update(chunk)
-
-    return h.hexdigest()
 
 
 def collect_fastq_files(output_dir: Path) -> Dict[Path, Path]:
@@ -76,42 +78,144 @@ def collect_fastq_files(output_dir: Path) -> Dict[Path, Path]:
     return result
 
 
-def print_text_diff_preview(a: Path, b: Path, max_lines: int = 200) -> None:
+def open_text_maybe_gzip(path: Path):
     """
-    Print a small unified diff preview for debugging.
+    Open plain text FASTQ or gzipped FASTQ.
+    """
+    if path.name.lower().endswith(".gz"):
+        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
 
-    For .gz files, only hash mismatch is reported.
+    return path.open("r", encoding="utf-8", errors="replace")
+
+
+def iter_fastq_records(path: Path) -> Iterator[FastqRecord]:
     """
-    if a.name.lower().endswith(".gz") or b.name.lower().endswith(".gz"):
-        print("Skip text diff preview for gzipped FASTQ file.")
+    Parse FASTQ records.
+
+    Returns:
+        (read_name, sequence, quality)
+
+    Notes:
+      - The '+' line is ignored.
+      - Full read name after '@' is used.
+      - The caller can compare records ignoring order.
+    """
+    with open_text_maybe_gzip(path) as f:
+        record_idx = 0
+
+        while True:
+            name = f.readline()
+
+            if not name:
+                break
+
+            seq = f.readline()
+            plus = f.readline()
+            qual = f.readline()
+
+            record_idx += 1
+
+            if not seq or not plus or not qual:
+                raise ValueError(
+                    f"Broken FASTQ record in {path}, "
+                    f"record index = {record_idx}"
+                )
+
+            name = name.rstrip("\n\r")
+            seq = seq.rstrip("\n\r")
+            plus = plus.rstrip("\n\r")
+            qual = qual.rstrip("\n\r")
+
+            if not name.startswith("@"):
+                raise ValueError(
+                    f"Invalid FASTQ name line in {path}, "
+                    f"record index = {record_idx}, "
+                    f"line = {name}"
+                )
+
+            if not plus.startswith("+"):
+                raise ValueError(
+                    f"Invalid FASTQ plus line in {path}, "
+                    f"record index = {record_idx}, "
+                    f"line = {plus}"
+                )
+
+            read_name = name[1:]
+
+            if len(seq) != len(qual):
+                raise ValueError(
+                    f"Sequence and quality length mismatch in {path}, "
+                    f"record index = {record_idx}, "
+                    f"read = {read_name}, "
+                    f"seq_len = {len(seq)}, "
+                    f"qual_len = {len(qual)}"
+                )
+
+            yield read_name, seq, qual
+
+
+def fastq_record_counter(path: Path) -> Counter:
+    """
+    Convert FASTQ file into an order-independent Counter.
+
+    This means:
+      same records + different order => equal
+      duplicate records are still counted correctly
+    """
+    return Counter(iter_fastq_records(path))
+
+
+def compare_fastq_unordered(current_file: Path, stable_file: Path) -> None:
+    """
+    Compare two FASTQ files ignoring record order.
+
+    Raises AssertionError if records differ.
+    """
+    current_counter = fastq_record_counter(current_file)
+    stable_counter = fastq_record_counter(stable_file)
+
+    if current_counter == stable_counter:
+        print(f"✅ FASTQ unordered match: {current_file.name}")
         return
 
-    try:
-        with a.open("r", encoding="utf-8", errors="replace") as fa:
-            a_lines = []
-            for _, line in zip(range(max_lines), fa):
-                a_lines.append(line)
+    missing_in_current = stable_counter - current_counter
+    extra_in_current = current_counter - stable_counter
 
-        with b.open("r", encoding="utf-8", errors="replace") as fb:
-            b_lines = []
-            for _, line in zip(range(max_lines), fb):
-                b_lines.append(line)
+    print("\nFASTQ unordered content mismatch:")
+    print(f"  current file = {current_file}")
+    print(f"  stable file  = {stable_file}")
+    print(f"  current records = {sum(current_counter.values())}")
+    print(f"  stable records  = {sum(stable_counter.values())}")
+    print(f"  missing records = {sum(missing_in_current.values())}")
+    print(f"  extra records   = {sum(extra_in_current.values())}")
 
-        diff = difflib.unified_diff(
-            a_lines,
-            b_lines,
-            fromfile=str(a),
-            tofile=str(b),
-            lineterm="",
-        )
+    max_preview = 10
 
-        print("---- diff preview ----")
-        for line in diff:
-            print(line.rstrip("\n"))
-        print("---- end diff preview ----")
+    if missing_in_current:
+        print("\nRecords missing in current output, preview:")
+        for i, ((name, seq, qual), count) in enumerate(missing_in_current.items()):
+            if i >= max_preview:
+                break
+            print(
+                f"  - count = {count}, "
+                f"read = {name}, "
+                f"seq_len = {len(seq)}, "
+                f"qual_len = {len(qual)}"
+            )
 
-    except Exception as e:
-        print(f"Failed to print diff preview: {e}")
+    if extra_in_current:
+        print("\nExtra records in current output, preview:")
+        for i, ((name, seq, qual), count) in enumerate(extra_in_current.items()):
+            if i >= max_preview:
+                break
+            print(
+                f"  - count = {count}, "
+                f"read = {name}, "
+                f"seq_len = {len(seq)}, "
+                f"qual_len = {len(qual)}"
+            )
+
+    raise AssertionError(f"FASTQ records differ ignoring order: {current_file.name}")
 
 
 def assert_fastq_dirs_equal(current_dir: Path, stable_dir: Path) -> None:
@@ -120,7 +224,9 @@ def assert_fastq_dirs_equal(current_dir: Path, stable_dir: Path) -> None:
 
     Checks:
       1. Relative FASTQ file list is identical.
-      2. Every corresponding FASTQ file has identical sha256.
+      2. FASTQ records are identical, ignoring record order inside each file.
+
+    This is suitable for multi-threaded output where write order is not deterministic.
     """
     current_files = collect_fastq_files(current_dir)
     stable_files = collect_fastq_files(stable_dir)
@@ -155,31 +261,32 @@ def assert_fastq_dirs_equal(current_dir: Path, stable_dir: Path) -> None:
         current_file = current_files[rel]
         stable_file = stable_files[rel]
 
-        current_hash = sha256_file(current_file)
-        stable_hash = sha256_file(stable_file)
-
-        if current_hash != stable_hash:
+        try:
+            compare_fastq_unordered(
+                current_file=current_file,
+                stable_file=stable_file,
+            )
+        except AssertionError as e:
             mismatch_count += 1
-
-            print(f"\nFASTQ content mismatch: {rel}")
-            print(f"  current file = {current_file}")
-            print(f"  stable file  = {stable_file}")
-            print(f"  current sha256 = {current_hash}")
-            print(f"  stable  sha256 = {stable_hash}")
-
-            print_text_diff_preview(current_file, stable_file)
+            print(f"\n❌ FASTQ mismatch for file: {rel}")
+            print(f"Reason: {e}")
 
     if mismatch_count > 0:
-        raise AssertionError(f"{mismatch_count} FASTQ file(s) differ")
+        raise AssertionError(
+            f"{mismatch_count} FASTQ file(s) differ after unordered comparison"
+        )
 
-    print(f"✅ FASTQ no-diff passed: {len(current_files)} file(s) are identical")
+    print(
+        f"✅ FASTQ no-diff passed: "
+        f"{len(current_files)} file(s) are identical ignoring record order"
+    )
 
 
 def choose_flag(help_text: str, kebab: str, snake: str) -> str:
     """
     Choose CLI flag style according to docker image help output.
 
-    Old stable image may use:
+    Old image may use:
         --log_folder
         --max_distance
         --pipeline_version
@@ -200,11 +307,11 @@ def choose_flag(help_text: str, kebab: str, snake: str) -> str:
     if snake in help_text:
         return snake
 
-    # Default to new style if not found in help.
+    # Default to new style if the option is not found in help text.
     return kebab
 
 
-@functools.lru_cache(maxsize=16)
+@functools.lru_cache(maxsize=32)
 def detect_cli_flags(docker_image: str) -> Dict[str, str]:
     """
     Detect which CLI flag style the image supports.
@@ -223,15 +330,31 @@ def detect_cli_flags(docker_image: str) -> Dict[str, str]:
     help_text = run_capture(help_cmd)
 
     flags = {
-        "log_folder": choose_flag(help_text, "--log-folder", "--log_folder"),
-        "max_distance": choose_flag(help_text, "--max-distance", "--max_distance"),
-        "pipeline_version": choose_flag(help_text, "--pipeline-version", "--pipeline_version"),
-        "output_format": choose_flag(help_text, "--output-format", "--output_format"),
+        "log_folder": choose_flag(
+            help_text,
+            "--log-folder",
+            "--log_folder",
+        ),
+        "max_distance": choose_flag(
+            help_text,
+            "--max-distance",
+            "--max_distance",
+        ),
+        "pipeline_version": choose_flag(
+            help_text,
+            "--pipeline-version",
+            "--pipeline_version",
+        ),
+        "output_format": choose_flag(
+            help_text,
+            "--output-format",
+            "--output_format",
+        ),
     }
 
     print(f"Detected CLI flags for image {docker_image}:")
-    for k, v in flags.items():
-        print(f"  {k} = {v}")
+    for key, value in flags.items():
+        print(f"  {key} = {value}")
 
     return flags
 
@@ -357,6 +480,7 @@ def run_pipeline1_fastq_no_diff_for_file(
     then compare generated FASTQ files.
     """
     sample_name = infile.name
+
     if sample_name.endswith(".bam"):
         sample_name = sample_name[:-4]
 
@@ -437,7 +561,7 @@ def smoke_and_regression_test(
     stable_image: Optional[str],
 ) -> None:
     """
-    Recommended regression behavior:
+    Regression behavior:
       1. Run smoke test with current image.
       2. If stable image is provided, run pipeline 1 FASTQ no-diff test.
     """
@@ -461,7 +585,9 @@ def smoke_and_regression_test(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run barcode_demux smoke/regression tests")
+    parser = argparse.ArgumentParser(
+        description="Run barcode_demux smoke/regression tests"
+    )
 
     parser.add_argument(
         "--test-file-dir",

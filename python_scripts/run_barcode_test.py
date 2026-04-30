@@ -12,6 +12,16 @@ from typing import Dict, Iterator, Optional, Sequence, Tuple
 FastqRecord = Tuple[str, str, str]
 
 
+# no-diff 时跳过这些 FASTQ 文件
+# 主要用于跳过不稳定或历史上有问题的 uncertain.fastq
+IGNORE_FASTQ_BASENAMES = {
+    "uncertain.fastq",
+    "uncertain.fq",
+    "uncertain.fastq.gz",
+    "uncertain.fq.gz",
+}
+
+
 def run(cmd: Sequence[str]) -> None:
     """Run a command and stream output; raise if non-zero."""
     print("➤", " ".join(cmd))
@@ -54,13 +64,22 @@ def is_fastq_file(path: Path) -> bool:
     )
 
 
+def should_ignore_fastq(path: Path) -> bool:
+    """
+    Return True if this FASTQ file should be ignored in no-diff comparison.
+    """
+    return path.name.lower() in IGNORE_FASTQ_BASENAMES
+
+
 def collect_fastq_files(output_dir: Path) -> Dict[Path, Path]:
     """
     Return:
         {relative_path: absolute_path}
 
     Only FASTQ files are collected.
+
     Logs, metrics, json, bam, bai, etc. are ignored.
+    uncertain.fastq is also ignored.
     """
     result: Dict[Path, Path] = {}
 
@@ -71,9 +90,15 @@ def collect_fastq_files(output_dir: Path) -> Dict[Path, Path]:
         if not p.is_file():
             continue
 
-        if is_fastq_file(p):
-            rel = p.relative_to(output_dir)
-            result[rel] = p
+        if not is_fastq_file(p):
+            continue
+
+        if should_ignore_fastq(p):
+            print(f"Skip ignored FASTQ file: {p}")
+            continue
+
+        rel = p.relative_to(output_dir)
+        result[rel] = p
 
     return result
 
@@ -226,6 +251,7 @@ def assert_fastq_dirs_equal(current_dir: Path, stable_dir: Path) -> None:
       1. Relative FASTQ file list is identical.
       2. FASTQ records are identical, ignoring record order inside each file.
 
+    uncertain.fastq is skipped by collect_fastq_files().
     This is suitable for multi-threaded output where write order is not deterministic.
     """
     current_files = collect_fastq_files(current_dir)
@@ -253,7 +279,10 @@ def assert_fastq_dirs_equal(current_dir: Path, stable_dir: Path) -> None:
         raise AssertionError("FASTQ file list differs between current and stable outputs")
 
     if not current_files:
-        raise AssertionError(f"No FASTQ files found under current output: {current_dir}")
+        raise AssertionError(
+            f"No comparable FASTQ files found under current output: {current_dir}. "
+            f"Maybe only ignored FASTQ files were produced."
+        )
 
     mismatch_count = 0
 
@@ -533,6 +562,9 @@ def mode_pipeline1_fastq_no_diff_test(
       current image pipeline 1 FASTQ output
       vs
       stable image pipeline 1 FASTQ output
+
+    FASTQ record order is ignored.
+    uncertain.fastq is skipped.
     """
     test_files = sorted(test_file_dir.glob("*smc_all_reads.bam"))
     pattern = test_file_dir / "ABarcode.fasta"

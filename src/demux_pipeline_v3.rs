@@ -1,9 +1,10 @@
-use crate::cli::Cli;
-
 use crate::barcode_mysers::{Direction, get_myers_from_barcodes};
+use crate::cli::Cli;
 use crate::core_context::BarcodePair;
 use crate::find_pattern::get_pattern_keys;
 use crate::get_demuxed_reads::RecordType;
+use std::collections::HashSet;
+use tracing::info;
 // use crate::multiple_barcode_demuxer_v1::multiple_barcode_demuxer_v1;
 use crate::bam_record_extention::ReadRecord;
 use crate::core_context::BarcodeCandidate;
@@ -35,9 +36,10 @@ use std::collections::HashMap;
 
 pub fn demux_pipeline_v3(cli: &Cli) -> Result<(), Box<dyn Error>> {
     ensure_output_dir(&cli.output_folder)?;
-    let patterns = read_sequences(&cli.barcode)?;
-
+    let mut patterns = read_sequences(&cli.barcode)?;
     let output_names = get_pattern_keys(&patterns);
+
+    add_r_counterparts_to_records(&mut patterns);
 
     type WriteMsg = (RecordType, Option<BarcodePair>);
     let queue_len = 10000;
@@ -95,6 +97,7 @@ pub fn demux_pipeline_v3(cli: &Cli) -> Result<(), Box<dyn Error>> {
                         &cli.output_format,
                         cli.search_bound,
                         cli.single_end_filter,
+                        cli.keep_barcode,
                     ) {
                         eprintln!("[Demux] error: {e}");
                     }
@@ -135,6 +138,7 @@ fn demux_reads_by_multiple_barcode(
     output_format: &str,
     search_bound: usize,
     single_end_filter: bool,
+    keep_barcode: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut barcode_f_myers = get_myers_from_barcodes(patterns, Direction::Forward);
     let mut barcode_r_myers = get_myers_from_barcodes(patterns, Direction::Reverse);
@@ -161,6 +165,7 @@ fn demux_reads_by_multiple_barcode(
             // ouput_folder,
             output_format,
             min_q,
+            keep_barcode,
         )?;
         // println!(demuxed_reads);
         if let Err(e) = sender.send(demuxed_reads) {
@@ -260,7 +265,30 @@ pub fn multiple_barcode_demuxer_v3(
 
         // 没有共有 key
         if shared_pairs.is_empty() {
-            counter!("len_ok_pair_fail").increment(1);
+            let best_lead = best_leading.values().min_by_key(|c| c.distance);
+
+            let best_trail = best_trailing.values().min_by_key(|c| c.distance);
+
+            match (best_lead, best_trail) {
+                (Some(lead), Some(trail)) => {
+                    info!(
+                        "{} has different barcode on each side: leading {} distance {}, trailing {} distance {}",
+                        target.id,
+                        lead.name.as_ref(),
+                        lead.distance,
+                        trail.name.as_ref(),
+                        trail.distance,
+                    );
+                }
+
+                _ => {
+                    info!(
+                        "{} has no shared barcode between leading and trailing candidates",
+                        target.id,
+                    );
+                }
+            }
+            counter!("len_ok_pair_fail_no_shared_barcode").increment(1);
             return Ok(None);
         }
 
@@ -282,39 +310,114 @@ pub fn multiple_barcode_demuxer_v3(
             outter_position: (lead.start, read_len - updated_search_bound + trail.end),
         };
         return Ok(Some(result));
-    } else if trailing_candidates.len() >= 1 && leading_candidates.len() == 0 && !single_end_filter
-    {
-        trailing_candidates.sort_by_key(|n| n.distance);
-        counter!("len_ok_pair_ok").increment(1);
+    } else if trailing_candidates.len() >= 1 && leading_candidates.len() == 0 {
+        // counter!("len_ok_pair_ok").increment(1);
 
-        counter!("len_ok_pair_ok_trailing_only").increment(1);
-        let result = BarcodePair {
-            name: trailing_candidates[0].name.clone(),
-            distance: (0, trailing_candidates[0].distance),
-            inner_position: (0, read_len - search_bound + trailing_candidates[0].start),
-            outter_position: (0, read_len - search_bound + trailing_candidates[0].end),
-        };
-        return Ok(Some(result));
+        if !single_end_filter {
+            trailing_candidates.sort_by_key(|n| n.distance);
+
+            if trailing_candidates.len() >= 2
+                && trailing_candidates[0].distance == trailing_candidates[1].distance
+            {
+                counter!("len_ok_pair_fail_trailing_only_score_tie").increment(1);
+                return Ok(None);
+            }
+            let result = BarcodePair {
+                name: trailing_candidates[0].name.clone(),
+                distance: (100, trailing_candidates[0].distance),
+                inner_position: (
+                    0,
+                    read_len - updated_search_bound + trailing_candidates[0].start,
+                ),
+                outter_position: (
+                    0,
+                    read_len - updated_search_bound + trailing_candidates[0].end,
+                ),
+            };
+            counter!("len_ok_single_end_trailing_ok").increment(1);
+
+            return Ok(Some(result));
+        } else {
+            counter!("len_ok_both_ends_fail_trailing_only").increment(1);
+
+            return Ok(None);
+        }
 
         // return Ok(None);
-    } else if leading_candidates.len() >= 1 && trailing_candidates.len() == 0 && !single_end_filter
-    {
-        leading_candidates.sort_by_key(|n| n.distance);
-        counter!("len_ok_pair_ok").increment(1);
-        counter!("len_ok_pair_ok_leading_only").increment(1);
-        let result = BarcodePair {
-            name: leading_candidates[0].name.clone(),
-            distance: (leading_candidates[0].distance, 0),
-            inner_position: (leading_candidates[0].end, read_len),
-            outter_position: (leading_candidates[0].start, read_len),
-        };
-        return Ok(Some(result));
+    } else if leading_candidates.len() >= 1 && trailing_candidates.len() == 0 {
+        // counter!("len_ok_pair_ok").increment(1);
+        if !single_end_filter {
+            leading_candidates.sort_by_key(|n| n.distance);
+
+            if leading_candidates.len() >= 2
+                && leading_candidates[0].distance == leading_candidates[1].distance
+            {
+                counter!("len_ok_pair_fail_leading_only_score_tie").increment(1);
+                return Ok(None);
+            }
+            let result = BarcodePair {
+                name: leading_candidates[0].name.clone(),
+                distance: (leading_candidates[0].distance, 100),
+                inner_position: (leading_candidates[0].end, read_len),
+                outter_position: (leading_candidates[0].start, read_len),
+            };
+            counter!("len_ok_single_end_leading_ok").increment(1);
+
+            return Ok(Some(result));
+        } else {
+            counter!("len_ok_both_ends_fail_leading_only").increment(1);
+
+            return Ok(None);
+        }
     } else {
-        counter!("len_ok_score_fail").increment(1);
+        counter!("len_ok_score_fail_no_barcode_found").increment(1);
         return Ok(None);
     }
 
     // 只要不是双端成功配对，一律返回 None
     // counter!("len_ok_score_fail").increment(1);
     // Ok(None)
+}
+
+fn add_r_counterparts_to_records(patterns: &mut Vec<ReadRecord>) {
+    /*
+     * 规则：
+     *
+     * xxx_F -> 补 xxx_R_R
+     * xxx_R -> 补 xxx_R_F
+     *
+     * 注意：
+     * 这里只复制原 record，并修改 id。
+     * sequence / quality / tags 等内容保持不变。
+     */
+    let mut existing_names: HashSet<String> = patterns
+        .iter()
+        .map(|record| record.id.to_string())
+        .collect();
+
+    let mut extra_records: Vec<ReadRecord> = Vec::new();
+
+    for record in patterns.iter() {
+        let name = record.id.as_ref();
+
+        if let Some(prefix) = name.strip_suffix("_F") {
+            let new_name = format!("{}_R_R", prefix);
+
+            if existing_names.insert(new_name.clone()) {
+                let mut new_record = record.clone();
+                new_record.id = Arc::<str>::from(new_name);
+                extra_records.push(new_record);
+            }
+        } else if let Some(prefix) = name.strip_suffix("_R") {
+            let new_name = format!("{}_R_F", prefix);
+
+            if existing_names.insert(new_name.clone()) {
+                let mut new_record = record.clone();
+                new_record.id = Arc::<str>::from(new_name);
+                extra_records.push(new_record);
+            }
+        }
+    }
+
+    patterns.extend(extra_records);
 }

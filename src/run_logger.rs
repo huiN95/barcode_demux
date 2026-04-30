@@ -1,33 +1,35 @@
 use crate::cli::Cli;
 use metrics;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
-// use once_cell::sync::Lazy;
-// use std::sync::Mutex;
-// use std::thread;
-// use std::time::Duration;
+
 use std::{
     error::Error,
-    fs::{create_dir_all, File, OpenOptions},
+    fs::{File, OpenOptions, create_dir_all},
     io::Write,
     path::{Path, PathBuf},
 };
-use tracing_subscriber;
+// use tracing_subscriber;
+use tracing::info;
+// use tracing_subscriber::prelude::*;
 // static LOG_GUARD: Lazy<Mutex<Option<tracing_appender::non_blocking::WorkerGuard>>> =
 //     Lazy::new(|| Mutex::new(None));
 // use std::{fs, path::Path};
 // use tracing_subscriber::fmt::time::ChronoLocal;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-pub fn init_tracing_log(cli: &Cli) -> tracing_appender::non_blocking::WorkerGuard {
+pub fn init_tracing_log(
+    cli: &Cli,
+    run_log_prefix: &str,
+) -> tracing_appender::non_blocking::WorkerGuard {
     let log_path = Path::new(&cli.log_folder);
 
     // 如果不存在就递归创建
     if !log_path.exists() {
         create_dir_all(log_path).unwrap();
     }
-    let run_log_path = log_path.join("barcode_demux_run.log");
 
-    // let run_log_filepath = format!("{}_primer_demux_run.log", log_path);
+    let run_log_path = log_path.join(format!("{}_barcode_demux_run.log", run_log_prefix));
+
     let log_file = File::create(&run_log_path).unwrap_or_else(|e| {
         panic!(
             "create run log file error: {} ({})",
@@ -35,14 +37,15 @@ pub fn init_tracing_log(cli: &Cli) -> tracing_appender::non_blocking::WorkerGuar
             e
         )
     });
-    // print!("run log file: {}", &run_log_filepath);
-    let (non_blocking, _guard) = tracing_appender::non_blocking(log_file);
+
+    let (non_blocking, guard) = tracing_appender::non_blocking(log_file);
+
     let filter = if let Some(s) = &cli.log {
         EnvFilter::try_new(s).unwrap()
     } else {
-        // 没传参数、也没环境变量时的默认
         EnvFilter::new("info")
     };
+
     tracing_subscriber::registry()
         .with(filter)
         .with(
@@ -55,16 +58,58 @@ pub fn init_tracing_log(cli: &Cli) -> tracing_appender::non_blocking::WorkerGuar
         )
         .try_init()
         .ok();
-    // tracing_subscriber::fmt()
-    //     // .with_timer(UtcTime::rfc_3339())
-    //     .with_timer(ChronoLocal::rfc_3339())
-    //     .with_ansi(false) //去掉颜色信息
-    //     .with_writer(non_blocking)
-    //     .try_init()
-    //     .expect("tracing_subscriber already initialized!");
-    _guard
-    // *LOG_GUARD.lock().unwrap() = Some(_guard);
+
+    info!("run log file: {}", run_log_path.display());
+
+    guard
 }
+// pub fn init_tracing_log(cli: &Cli) -> tracing_appender::non_blocking::WorkerGuard {
+//     let log_path = Path::new(&cli.log_folder);
+
+//     // 如果不存在就递归创建
+//     if !log_path.exists() {
+//         create_dir_all(log_path).unwrap();
+//     }
+//     let run_log_path = log_path.join("barcode_demux_run.log");
+
+//     // let run_log_filepath = format!("{}_primer_demux_run.log", log_path);
+//     let log_file = File::create(&run_log_path).unwrap_or_else(|e| {
+//         panic!(
+//             "create run log file error: {} ({})",
+//             run_log_path.display(),
+//             e
+//         )
+//     });
+//     // print!("run log file: {}", &run_log_filepath);
+//     let (non_blocking, _guard) = tracing_appender::non_blocking(log_file);
+//     let filter = if let Some(s) = &cli.log {
+//         EnvFilter::try_new(s).unwrap()
+//     } else {
+//         // 没传参数、也没环境变量时的默认
+//         EnvFilter::new("info")
+//     };
+//     tracing_subscriber::registry()
+//         .with(filter)
+//         .with(
+//             fmt::layer()
+//                 .with_timer(tracing_subscriber::fmt::time::ChronoLocal::rfc_3339())
+//                 .with_ansi(false)
+//                 .with_writer(non_blocking)
+//                 .with_target(true)
+//                 .with_thread_ids(true),
+//         )
+//         .try_init()
+//         .ok();
+//     // tracing_subscriber::fmt()
+//     //     // .with_timer(UtcTime::rfc_3339())
+//     //     .with_timer(ChronoLocal::rfc_3339())
+//     //     .with_ansi(false) //去掉颜色信息
+//     //     .with_writer(non_blocking)
+//     //     .try_init()
+//     //     .expect("tracing_subscriber already initialized!");
+//     _guard
+//     // *LOG_GUARD.lock().unwrap() = Some(_guard);
+// }
 
 pub struct MetricsGuard {
     handle: PrometheusHandle,
@@ -90,7 +135,50 @@ impl Drop for MetricsGuard {
 }
 
 /// 在程序启动时调用，返回一个 MetricsGuard。
-pub fn init_metrics<P: AsRef<Path>>(dir: P) -> Result<MetricsGuard, Box<dyn Error>> {
+// pub fn init_metrics<P: AsRef<Path>>(dir: P) -> Result<MetricsGuard, Box<dyn Error>> {
+//     // 1. 构建 recorder
+//     let recorder = PrometheusBuilder::new()
+//         .set_buckets(
+//             vec![
+//                 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 13.0, 21.0, 34.0, 55.0, 100.0,
+//                 1000.0,
+//             ]
+//             .as_slice(),
+//         )
+//         .unwrap()
+//         .build_recorder();
+//     let handle = recorder.handle();
+//     // 2. 注册为全局。若已注册过，返回 Err，而不是 panic。
+//     metrics::set_global_recorder(Box::new(recorder)).unwrap();
+
+//     // 3. 生成日志路径
+//     // let path = dir.as_ref().join("primer_metrics.prom"); // 可根据需要改名/加时间戳
+//     // let mut f = std::fs::File::create(&path).unwrap();
+//     let in_path = dir.as_ref();
+//     let out_path = if in_path.is_dir() {
+//         // 传进来的是目录
+//         in_path.join("primer_metrics.log")
+//     } else {
+//         // 传进来的是文件；改文件名
+//         let stem = in_path
+//             .file_stem()
+//             .and_then(|s| s.to_str())
+//             .unwrap_or("metrics");
+
+//         let mut buf = PathBuf::from(in_path);
+//         buf.set_file_name(format!("{stem}_primer_metrics.log"));
+//         buf
+//     };
+//     Ok(MetricsGuard {
+//         handle,
+//         path: out_path,
+//     })
+// }
+/// 在程序启动时调用，返回一个 MetricsGuard。
+pub fn init_metrics<P: AsRef<Path>>(
+    dir: P,
+    run_log_prefix: &str,
+) -> Result<MetricsGuard, Box<dyn Error>> {
     // 1. 构建 recorder
     let recorder = PrometheusBuilder::new()
         .set_buckets(
@@ -102,28 +190,54 @@ pub fn init_metrics<P: AsRef<Path>>(dir: P) -> Result<MetricsGuard, Box<dyn Erro
         )
         .unwrap()
         .build_recorder();
+
     let handle = recorder.handle();
-    // 2. 注册为全局。若已注册过，返回 Err，而不是 panic。
-    metrics::set_global_recorder(Box::new(recorder)).unwrap();
+
+    // 2. 注册为全局。
+    // 注意：metrics 全局 recorder 只能注册一次。
+    metrics::set_global_recorder(Box::new(recorder)).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("set global metrics recorder failed: {e}"),
+        )
+    })?;
 
     // 3. 生成日志路径
-    // let path = dir.as_ref().join("primer_metrics.prom"); // 可根据需要改名/加时间戳
-    // let mut f = std::fs::File::create(&path).unwrap();
     let in_path = dir.as_ref();
-    let out_path = if in_path.is_dir() {
-        // 传进来的是目录
-        in_path.join("primer_metrics.log")
-    } else {
-        // 传进来的是文件；改文件名
+
+    let out_path = if in_path.exists() && in_path.is_file() {
+        /*
+         * 兼容原来的逻辑：
+         * 如果传进来的是一个文件路径，则在原文件名前面加 run_log_prefix。
+         *
+         * 例如：
+         *   /logs/abc.log
+         *
+         * 变成：
+         *   /logs/abc_20260429_Run0001_pv3_pidxxx_xxx_primer_metrics.log
+         */
         let stem = in_path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("metrics");
 
-        let mut buf = PathBuf::from(in_path);
-        buf.set_file_name(format!("{stem}_primer_metrics.log"));
-        buf
+        let parent = in_path.parent().unwrap_or_else(|| Path::new("."));
+        create_dir_all(parent)?;
+
+        parent.join(format!("{}_{}_primer_metrics.log", stem, run_log_prefix))
+    } else {
+        /*
+         * 常用情况：
+         * cli.log_folder 传进来的是目录。
+         *
+         * 最终文件名：
+         *   {input_prefix}_pv3_pidxxx_timestamp_primer_metrics.log
+         */
+        create_dir_all(in_path)?;
+
+        in_path.join(format!("{}_primer_metrics.log", run_log_prefix))
     };
+
     Ok(MetricsGuard {
         handle,
         path: out_path,

@@ -19,7 +19,7 @@ variables:
   RELEASE_TAG: $CI_COMMIT_TAG
   CI_REGISTRY_IMAGE: 192.168.3.38:5000/algo/barcode_demux
   # GIT_SUBMODULE_STRATEGY: recursive
-  ALI_ACR_REGISTRY_IMAGE: geneus-registry.cn-hongkong.cr.aliyuncs.com/algo/adacus
+  ALI_ACR_REGISTRY_IMAGE: geneus-registry.cn-hongkong.cr.aliyuncs.com/algo/barcode_demux
   REFS_DIR: /data/CI_CD_DATASETS/REF_GENOMES
 
 

@@ -171,6 +171,7 @@ fn demux_reads_by_multiple_barcode(
             // ouput_folder,
             output_format,
             min_q,
+            false,
         )?;
         // println!(demuxed_reads);
         if let Err(e) = sender.send(demuxed_reads) {

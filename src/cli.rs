@@ -4,7 +4,7 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[command(
     name = "artificial barcode demux",
-    version = "0.0.2",
+    version = "1.0.2",
     about = "匹配给定模式在序列文件中的近似匹配",
     // 可以在这里添加 long_about 提供更长篇幅的程序总体说明
     long_about = None 

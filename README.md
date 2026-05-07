@@ -1,4 +1,4 @@
-# Barcode Demux (v1.0.2)
+# Barcode Demux (v1.0.5)
 
 > **⚠️ WARNING: RESEARCH USE ONLY**
 >
@@ -21,20 +21,23 @@
   - Configurable edit distance (max distance) for barcode matching.
 - **Quality Filtering**: Integrated quality thresholding for FASTQ and BAM outputs.
 - **Comprehensive Logging**: Detailed tracing logs and Prometheus-compatible metrics for monitoring performance and results.
+- **Flexible CLI**: Supports both hyphenated (`--input-file`) and underscored (`--input_file`) argument styles.
 
 ## Installation
 
-### Prerequisites
+### Via Conda (Recommended)
 
-- Rust (MSRV 1.70+)
-- `libhts` (for BAM support, usually provided by `rust-htslib` or installed on the system)
+Once available on Bioconda:
+```bash
+conda install -c bioconda barcode_demux
+```
 
 ### Build from Source
 
 ```bash
-git clone http://192.168.3.38/algo/barcode_demux.git
+git clone https://github.com/huiN95/barcode_demux.git
 cd barcode_demux
-git checkout artifical
+git checkout v1.0.5
 cargo build --release
 ```
 
@@ -50,6 +53,8 @@ barcode_demux -i input.bam -b barcodes.fasta -o output-dir --log-folder logs
 
 ### CLI Arguments
 
+Supports both `--arg-name` and `--arg_name` aliases.
+
 | Argument | Short | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--input-file` | `-i` | (Required) | Path to input sequencing file (FASTA/FASTQ/BAM). |
@@ -63,50 +68,20 @@ barcode_demux -i input.bam -b barcodes.fasta -o output-dir --log-folder logs
 | `--search-bound` | | `40` | Search range (in bp) at the beginning and end of each read. |
 | `--threads` | | `0` | Number of CPU threads to use (0 for auto). |
 | `--pipeline-version` | | `1` | Pipeline logic version (1, 2, 3, 4). |
-| `--keep-barcode` | | `false` | Whether to keep the barcode in the output (v3 only). |
+| `--keep-barcode` | | `false` | Whether to keep the barcode in the output. |
 | `--single-end-filter`| | `false` | Filter out reads that only match at one end. |
-| `--min-pair-len` | | (v4 only) | Minimum pair length (required if pipeline-version is 4). |
-| `--min-pair-score` | | (v4 only) | Minimum pair matching score (required if pipeline-version is 4). |
 
 ## How it Works
 
-1. **Barcode Indexing**: The tool reads the provided barcode FASTA file and creates Myers matching patterns for both forward and reverse directions.
-2. **Search Logic**: For each read, it searches the first and last `search-bound` base pairs for the specified barcodes.
-3. **Classification**:
-   - **Double-matched**: The same barcode is found at both ends.
-   - **Single-matched**: A barcode is found at only one end.
-   - **Uncertain**: No barcode matches or multiple conflicting matches.
-4. **Extraction**: The sequence between the identified barcodes (or from the barcode to the end) is extracted as the subread.
-5. **Quality Check**: For FASTQ/BAM, the average quality of the extracted subread is checked against `--min-q`.
-
-## Examples
-
-### Demux BAM to FASTQ with Mismatches
-Allowing up to 2 mismatches in barcodes, searching within the first/last 50bp, and filtering for Q20:
-```bash
-barcode_demux -i data/runs/sample.bam \
-              -b config/barcodes.fa \
-              -o output/ \
-              --log_folder output/logs \
-              --output-format fastq \
-              --max-distance 2 \
-              --search-bound 50 \
-              --min-q 20
-```
-
-### Demux FASTA to FASTA
-```bash
-barcode_demux -i input.fa -b barcodes.fa -o out_dir --log_folder logs --output-format fasta
-```
-
-## Metrics and Monitoring
-
-The tool generates metrics in the `log_folder` that can be used to monitor:
-- Total reads processed.
-- Filtered reads (too short or low quality).
-- Success rate of demultiplexing per barcode.
+1. **Barcode Indexing**: The tool reads the provided barcode FASTA file and creates Myers matching patterns.
+2. **Search Logic**: For each read, it searches the first and last `search-bound` base pairs.
+3. **Classification**: Identifies double-matched, single-matched, or uncertain reads.
+4. **Extraction**: The sequence between identified barcodes is extracted.
 
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
 
+## Contact
+
+[huiN95] - [GitHub Profile](https://github.com/huiN95/barcode_demux)

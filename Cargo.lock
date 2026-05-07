@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "barcode_demux"
-version = "1.0.3"
+version = "1.0.5"
 dependencies = [
  "anyhow",
  "bio",

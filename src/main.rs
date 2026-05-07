@@ -1,21 +1,21 @@
 // mod alignment_statistics;
 mod bam_record_extention;
-mod cli;
-mod find_pattern;
-mod get_demuxed_reads;
-mod io_utils;
-mod pbar;
-mod reader_worker;
-mod run_logger;
-// mod statitcs;
 mod barcode_demuxer_v1;
 mod barcode_mysers;
+mod cli;
 mod core_context;
 mod demux_pipeline_v1;
 mod demux_pipeline_v2;
 mod demux_pipeline_v3;
 mod demux_pipeline_v4;
 mod demux_primer;
+mod find_pattern;
+mod get_demuxed_reads;
+mod io_utils;
+mod metrics_description;
+mod pbar;
+mod reader_worker;
+mod run_logger;
 // mod multiple_barcode_demuxer_v1;
 mod writer_worker;
 use crate::demux_pipeline_v1::demux_pipeline_v1;
@@ -29,8 +29,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use run_logger::{init_metrics, init_tracing_log};
 // use crate::io_utils::ensure_output_dir;
+use metrics_description::describe_metrics;
 use tracing::info;
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
@@ -40,6 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _log_writer = init_tracing_log(&cli, &run_log_prefix);
     let _metric_writer = init_metrics(log_path, &run_log_prefix)?;
+    describe_metrics();
 
     info!("Start processing");
     info!(?cli, "parsed CLI");

@@ -7,8 +7,7 @@ package:
 
 source:
   url: https://github.com/huiN95/{{ name }}/archive/refs/tags/v{{ version }}.tar.gz
-  # 注意：在发布后需要更新此 sha256 值
-  sha256: 0000000000000000000000000000000000000000000000000000000000000000
+  sha256: f5b838f31ae028fc4937461e5f46108fe8cfdfa7097c48f8c2fc610814ca4fe0
 
 build:
   number: 0

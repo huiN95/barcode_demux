@@ -38,7 +38,7 @@ tracing-appender = "0.2.4"
 num_cpus = "1.16.0"
 glob = "0.3.3"
 regex = "1.12.2"
-rust-htslib = "1.0.0"
+rust-htslib = "=0.46.0"
 
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.149"

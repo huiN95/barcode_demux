@@ -37,7 +37,7 @@ conda install -c bioconda barcode_demux
 ```bash
 git clone https://github.com/huiN95/barcode_demux.git
 cd barcode_demux
-git checkout v1.0.5
+git checkout v1.0.7
 cargo build --release
 ```
 
@@ -80,7 +80,7 @@ Supports both `--arg-name` and `--arg_name` aliases.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ## Contact
 

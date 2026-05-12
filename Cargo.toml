@@ -1,7 +1,9 @@
 [package]
 name = "barcode_demux"
-version = "1.0.6"
+version = "1.0.7"
 edition = "2024"
+license = "MIT"
+repository = "https://github.com/huiN95/barcode_demux"
 
 [dependencies]
 log = "0.4.29"

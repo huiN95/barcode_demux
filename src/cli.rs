@@ -3,8 +3,8 @@ use clap::Parser;
 /// 定义 CLI 结构体
 #[derive(Parser, Debug)]
 #[command(
-    name = "artificial barcode demux",
-    version = "1.0.6",
+    name = "barcode demux",
+    version = "1.0.7",
     about = "匹配给定模式在序列文件中的近似匹配",
     long_about = None
 )]

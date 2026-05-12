@@ -1,4 +1,4 @@
-# Barcode Demux (v1.0.5)
+# Barcode Demux (v1.0.7)
 
 > **⚠️ WARNING: RESEARCH USE ONLY**
 >

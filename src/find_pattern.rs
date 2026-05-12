@@ -11,7 +11,12 @@ pub fn get_pattern_keys(pattern_records: &Vec<ReadRecord>) -> Vec<String> {
             let s: &str = r.id.as_ref();
 
             // 去掉尾部 2 个字符（不足 2 个就变成空串）
-            let trimmed = if s.len() >= 2 { &s[..s.len() - 2] } else { "" };
+            let trimmed = s
+                .strip_suffix("_F")
+                .or_else(|| s.strip_suffix("_R"))
+                .or_else(|| s.strip_suffix("_L"))
+                .or_else(|| s.strip_suffix("_T"))
+                .unwrap_or(&s);
 
             trimmed.to_string()
         })

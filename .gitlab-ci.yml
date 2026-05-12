@@ -9,56 +9,245 @@ stages:
   - nodiff_test
   - push_release
   - package
+  - push_ali
 
 variables:
   PROJECT_NAME: barcode_demux
   TEMP_TAG: tmp-$CI_COMMIT_SHORT_SHA
+
   BARCODE_SMOKE_TEST_DIR: /data/CI_CD_DATASETS/PROJECT_barcode/smoke_test
-  # ASSIGN_BARCODE_TEST_DIR: /data/CI_CD_DATASETS/PROJECT_primer/assign_barcode_test
+  BARCODE_TEST_OUTPUT_DIR: /data/CI_CD_DATASETS/PROJECT_barcode/smoke_test/output
+
   RELEASE_TAG: $CI_COMMIT_TAG
+
   CI_REGISTRY_IMAGE: 192.168.3.38:5000/algo/barcode_demux
-  GIT_SUBMODULE_STRATEGY: recursive
+  ALI_ACR_REGISTRY_IMAGE: geneus-registry.cn-hongkong.cr.aliyuncs.com/algo/barcode_demux
+
+  REFS_DIR: /data/CI_CD_DATASETS/REF_GENOMES
+
+  # 上一次正式发布版本，用作 no-diff 对照
+  STABLE_TAG: stable
 
 
 # ===============================
-# 1. Push 到 main 分支流程
+# 1. 构建临时镜像
+# branch / main / tag 都会构建
+# web 手动触发不跑
 # ===============================
-
 
 build_temp_image:
   stage: build_temp_image
   script:
-    - echo `whoami`
-    # - bash -c 'source ~/.bashrc && echo `python --version` '
-    - echo "📦 Building temp image..."
-    - DOCKER_BUILDKIT=1 docker build -t $PROJECT_NAME:$TEMP_TAG .
-  except:
-    - tags
-    - web
+    - whoami
+    - echo "Building temp image"
+    - echo "Project name = ${PROJECT_NAME}"
+    - echo "Temp tag = ${TEMP_TAG}"
+    - DOCKER_BUILDKIT=1 docker build -t ${PROJECT_NAME}:${TEMP_TAG} .
+    - docker images | grep ${PROJECT_NAME} || true
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+      when: never
+    - when: on_success
 
+
+# ===============================
+# 2. 冒烟测试
+# 只测试当前临时镜像
+# ===============================
 
 adapter_smoke_test:
   stage: smoke_test
+  needs:
+    - build_temp_image
   script:
-    - echo `whoami`
-    - echo "🔥 Smoke testing temp image..."
-    - echo "冒烟测试文件"
-    - bash -c 'source ~/.bashrc && python -u python_scripts/run_barcode_test.py --test-file-dir ${BARCODE_SMOKE_TEST_DIR} --docker-image ${PROJECT_NAME}:${TEMP_TAG} --test-type smoke'
-  except:
-    - tags
-    - web
+    - whoami
+    - echo "Running smoke test"
+    - echo "Smoke test dataset = ${BARCODE_SMOKE_TEST_DIR}"
+    - echo "Smoke test output = ${BARCODE_TEST_OUTPUT_DIR}"
+    - rm -rf ${BARCODE_TEST_OUTPUT_DIR}/smoke
+    - mkdir -p ${BARCODE_TEST_OUTPUT_DIR}
+    - >-
+      bash -lc 'source ~/.bashrc &&
+      python -u python_scripts/run_barcode_test.py
+      --test-file-dir ${BARCODE_SMOKE_TEST_DIR}
+      --output-root ${BARCODE_TEST_OUTPUT_DIR}
+      --docker-image ${PROJECT_NAME}:${TEMP_TAG}
+      --test-type smoke'
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+      when: never
+    - when: on_success
 
+
+# ===============================
+# 3. no-diff 测试
+#
+# 当前镜像 vs 上一次 stable 镜像
+#
+# Python 脚本中固定测试：
+#   pipeline-version 1
+#   output-format fastq
+#   比较 FASTQ 文件是否完全一致
+# ===============================
+
+barcode_nodiff_test:
+  stage: nodiff_test
+  needs:
+    - build_temp_image
+    - adapter_smoke_test
+  script:
+    - whoami
+    - echo "Running no-diff test"
+    - echo "Current image = ${PROJECT_NAME}:${TEMP_TAG}"
+    - echo "Stable image = ${CI_REGISTRY_IMAGE}:${STABLE_TAG}"
+    - echo "No-diff output = ${BARCODE_TEST_OUTPUT_DIR}"
+    - rm -rf ${BARCODE_TEST_OUTPUT_DIR}/no_diff_pipeline1_fastq
+    - mkdir -p ${BARCODE_TEST_OUTPUT_DIR}
+
+    # 本地有 stable 就直接用；没有再从 registry 拉取
+    - |
+      if docker image inspect "${CI_REGISTRY_IMAGE}:${STABLE_TAG}" >/dev/null 2>&1; then
+        echo "Using local stable image = ${CI_REGISTRY_IMAGE}:${STABLE_TAG}"
+      else
+        echo "Local stable image not found, pulling from registry"
+        docker pull "${CI_REGISTRY_IMAGE}:${STABLE_TAG}"
+      fi
+
+    - >-
+      bash -lc 'source ~/.bashrc &&
+      python -u python_scripts/run_barcode_test.py
+      --test-file-dir ${BARCODE_SMOKE_TEST_DIR}
+      --output-root ${BARCODE_TEST_OUTPUT_DIR}
+      --docker-image ${PROJECT_NAME}:${TEMP_TAG}
+      --stable-image ${CI_REGISTRY_IMAGE}:${STABLE_TAG}
+      --test-type no-diff'
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+      when: never
+    - when: on_success
+
+
+# ===============================
+# 4. regression 测试
+#
+# 当前暂时不启用。
+# 如果你希望 regression = smoke + no-diff，
+# 可以取消下面这个 job 的注释。
+# ===============================
+
+# adapter_regression_test:
+#   stage: regression_test
+#   needs:
+#     - build_temp_image
+#     - adapter_smoke_test
+#   script:
+#     - whoami
+#     - echo "Running regression test"
+#     - echo "Current image = ${PROJECT_NAME}:${TEMP_TAG}"
+#     - echo "Stable image = ${CI_REGISTRY_IMAGE}:${STABLE_TAG}"
+#     - echo "Regression output = ${BARCODE_TEST_OUTPUT_DIR}"
+#     - rm -rf ${BARCODE_TEST_OUTPUT_DIR}/smoke
+#     - rm -rf ${BARCODE_TEST_OUTPUT_DIR}/no_diff_pipeline1_fastq
+#     - mkdir -p ${BARCODE_TEST_OUTPUT_DIR}
+#     - |
+#       if docker image inspect "${CI_REGISTRY_IMAGE}:${STABLE_TAG}" >/dev/null 2>&1; then
+#         echo "Using local stable image = ${CI_REGISTRY_IMAGE}:${STABLE_TAG}"
+#       else
+#         echo "Local stable image not found, pulling from registry"
+#         docker pull "${CI_REGISTRY_IMAGE}:${STABLE_TAG}"
+#       fi
+#     - >-
+#       bash -lc 'source ~/.bashrc &&
+#       python -u python_scripts/run_barcode_test.py
+#       --test-file-dir ${BARCODE_SMOKE_TEST_DIR}
+#       --output-root ${BARCODE_TEST_OUTPUT_DIR}
+#       --docker-image ${PROJECT_NAME}:${TEMP_TAG}
+#       --stable-image ${CI_REGISTRY_IMAGE}:${STABLE_TAG}
+#       --test-type regression'
+#   rules:
+#     - if: '$CI_PIPELINE_SOURCE == "web"'
+#       when: never
+#     - when: on_success
+
+
+# ===============================
+# 5. tag 发版
+#
+# 只有 git tag pipeline 才执行。
+# 发版成功后，同时更新 stable。
+# ===============================
 
 push_release:
   stage: push_release
+  needs:
+    - build_temp_image
+    - adapter_smoke_test
+    - barcode_nodiff_test
   script:
-    - echo `whoami`
-    - echo "📤 Pushing release image..."
-    - docker tag $PROJECT_NAME:$TEMP_TAG $CI_REGISTRY_IMAGE:$RELEASE_TAG
-    - docker push $CI_REGISTRY_IMAGE:$RELEASE_TAG
-    - echo "📤 Pushing release image DONE. $CI_REGISTRY_IMAGE:$RELEASE_TAG"
-  only:
-    - tags
+    - whoami
+    - echo "Pushing release image"
+    - echo "Release tag = ${RELEASE_TAG}"
+    - echo "Release image = ${CI_REGISTRY_IMAGE}:${RELEASE_TAG}"
+    - echo "Stable image = ${CI_REGISTRY_IMAGE}:${STABLE_TAG}"
+
+    # 推送正式 release tag
+    - docker tag ${PROJECT_NAME}:${TEMP_TAG} ${CI_REGISTRY_IMAGE}:${RELEASE_TAG}
+    - docker push ${CI_REGISTRY_IMAGE}:${RELEASE_TAG}
+
+    # 更新 stable，作为下一次 no-diff 的基准
+    - docker tag ${PROJECT_NAME}:${TEMP_TAG} ${CI_REGISTRY_IMAGE}:${STABLE_TAG}
+    - docker push ${CI_REGISTRY_IMAGE}:${STABLE_TAG}
+
+    - echo "Pushing release image done"
+    - echo "Release image = ${CI_REGISTRY_IMAGE}:${RELEASE_TAG}"
+    - echo "Stable image = ${CI_REGISTRY_IMAGE}:${STABLE_TAG}"
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: on_success
 
 
+# ===============================
+# 6. 打包 tar
+#
+# 只有 tag pipeline 才执行。
+# ===============================
 
+package:
+  stage: package
+  needs:
+    - push_release
+  script:
+    - whoami
+    - echo "Generating docker image package"
+    - echo "Package image = ${CI_REGISTRY_IMAGE}:${RELEASE_TAG}"
+    - docker pull ${CI_REGISTRY_IMAGE}:${RELEASE_TAG}
+    - docker save -o ${PROJECT_NAME}-${RELEASE_TAG}.tar ${CI_REGISTRY_IMAGE}:${RELEASE_TAG}
+    - mv ${PROJECT_NAME}-${RELEASE_TAG}.tar /dataLab/Geneus110/BC/共享文件夹/算法镜像/adacus
+    - echo "Package done"
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: on_success
+
+
+# ===============================
+# 7. 推送到阿里云 ACR
+#
+# 只有 tag pipeline 才执行。
+# ===============================
+
+push_ali:
+  stage: push_ali
+  needs:
+    - push_release
+  script:
+    - whoami
+    - echo "Pushing release image to Aliyun ACR"
+    - echo "Source image = ${CI_REGISTRY_IMAGE}:${RELEASE_TAG}"
+    - echo "Target image = ${ALI_ACR_REGISTRY_IMAGE}:${RELEASE_TAG}"
+    - docker pull ${CI_REGISTRY_IMAGE}:${RELEASE_TAG}
+    - docker tag ${CI_REGISTRY_IMAGE}:${RELEASE_TAG} ${ALI_ACR_REGISTRY_IMAGE}:${RELEASE_TAG}
+    - docker push ${ALI_ACR_REGISTRY_IMAGE}:${RELEASE_TAG}
+    - echo "Push to Aliyun ACR done"
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: on_success

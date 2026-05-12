@@ -1,10 +1,10 @@
 use crate::barcode_demuxer_v1::barcode_demuxer_v1;
-use crate::barcode_mysers::{get_myers_from_barcodes, Direction};
+use crate::barcode_mysers::{Direction, get_myers_from_barcodes};
 
 use crate::bam_record_extention::ReadRecord;
 // use crate::core_context::{Annotated, BarcodeCandidate, PrimerMeta};
 // use crate::find_pattern::merge_non_overlapping_no_copy;
-use crate::get_demuxed_reads::{prepare_record_to_writer, RecordType};
+use crate::get_demuxed_reads::{RecordType, prepare_record_to_writer};
 use crossbeam::channel::{Receiver, Sender};
 
 // use metrics::{self, counter, histogram};
@@ -48,6 +48,7 @@ pub fn demux_reads_by_barcode(
             // ouput_folder,
             output_format,
             min_q,
+            false,
         )?;
         // println!(demuxed_reads);
         if let Err(e) = sender.send(demuxed_reads) {
